@@ -1225,6 +1225,519 @@ POD 的 `esims` 模块共计 34 个端点，覆盖 eSIM 设备及 Profile 的完
 
 ---
 
+## Portal UI Design（基于 POD CMP 页面布局复刻）
+
+本章节基于 POD CMP (prp.gdiotsuite.com) 实际页面布局设计 local_cmp 的 Portal 界面，覆盖全局框架、仪表盘、列表页、表单页和详情页。
+
+### 全局框架
+
+```
++---------------------------------------------------+
+|  Logo   |  顶部导航栏（通知/帮助/用户头像）            |
++---------+-----------------------------------------+
+|         |                                           |
+| 侧边栏  |         主内容区域                          |
+| 导航菜单 |        （面包屑 + 页面内容）                 |
+|         |                                           |
+|         |                                           |
++---------+-----------------------------------------+
+```
+
+#### 顶部导航栏
+
+| 元素 | 位置 | 说明 |
+|------|------|------|
+| Logo | 左侧 | local_cmp 品牌标识 |
+| 通知图标 | 右侧 | 系统通知与告警 |
+| 帮助图标 | 右侧 | 在线帮助入口 |
+| 用户头像/名称 | 右侧 | 下拉菜单（个人设置/退出登录） |
+
+#### 左侧边栏导航
+
+| 分组 | 菜单项 | 路由 | 对应权限 | 说明 |
+|------|--------|------|----------|------|
+| 仪表盘 | 仪表盘 | `/dashboard` | read_SIM/read_eSIM/read_PROFILE | 企业用户首页，Widget 仪表盘 |
+| 客户管理 | 账户管理 | `/accounts` | ADMIN_Account | 账户列表（含搜索/筛选/CRUD） |
+| | 用户管理 | `/users` | ADMIN_User | 用户列表（含搜索/筛选/CRUD） |
+| 资产管理 | SIM & Profile | `/assets/sim` | read_SIM | SIM/Profile 资产列表 |
+| | eSIM 管理 | `/assets/esim` | read_eSIM | eSIM 资产列表 |
+| | 套餐管理 | `/plans` | read_Plan | 商用套餐管理 |
+| | 库存管理 | `/inventory` | ADMIN_ALL | 库存报表（仅 root） |
+| 话单计费 | 话单查询 | `/cdr` | read_CDR | 累计话单与实时话单 |
+| | 账单管理 | `/bills` | read_Billing | 账单查询与调整 |
+| 系统管理 | 资源方管理 | `/resource-providers` | ADMIN_Resource | 资源方配置 |
+| | 审计日志 | `/audit-logs` | ADMIN_ALL | 审计日志（仅 root） |
+
+---
+
+### 1. 仪表盘首页
+
+**路由:** `/dashboard`
+**所需权限:** read_SIM / read_eSIM / read_PROFILE / read_CDR / read_Billing
+
+#### 布局：2 列 x 3 行 Widget 网格
+
+```
++-------------------------------+-------------------------------+
+| Allocated Assets by Status    | Traffic by Package            |
+| (饼图/图表)                    | (当前计费周期)                  |
+|                               | Package Name | Size | Usage % |
++-------------------------------+-------------------------------+
+| Traffic by Operator (7 days)  | Traffic by Country (7 days)   |
+| (柱状图/图表)                  | (图表)                         |
++-------------------------------+-------------------------------+
+| Top Data Users Yesterday      | Connection Count Yesterday    |
+| ICCID | Total Data (MB)       | (数字/图表)                    |
+| 分页 Show 5 records           |                               |
++-------------------------------+-------------------------------+
+```
+
+#### Widget 详细规格
+
+| Widget | 类型 | 数据源 | 说明 |
+|--------|------|--------|------|
+| Allocated Assets by Status | 饼图 | asset 表 GROUP BY status | 按状态统计已分配资产 |
+| Traffic by Package | 表格 | cdr_accumulated + plan | 按套餐统计当前计费周期流量 |
+| Traffic by Operator (7 days) | 柱状图 | cdr_accumulated 近 7 天 | 按运营商统计流量 |
+| Traffic by Country (7 days) | 柱状图 | cdr_accumulated 近 7 天 | 按国家统计流量 |
+| Top Data Users Yesterday | 表格 (5 rows) | cdr_accumulated 昨日 | 昨日流量 Top 5 资产 |
+| Connection Count Yesterday | 数字卡片 | cdr_accumulated 昨日 | 昨日连接次数统计 |
+
+#### Dashboard 操作按钮
+
+| 按钮 | 位置 | 功能 |
+|------|------|------|
+| Reset Widgets | 页面右上角 | 重置仪表盘至默认布局 |
+| Add Widget | 页面右上角 | 添加新 Widget（从可选列表中选择） |
+
+---
+
+### 2. 账户管理页面
+
+#### 2-1. 账户列表页
+
+**路由:** `/accounts`
+**所需权限:** ADMIN_Account
+
+```
++---------------------------------------------------+
+| Customers > All Accounts              [+ Add Account] [Help] |
++---------------------------------------------------+
+| Search by Name: [________] [Search]                |
++---------------------------------------------------+
+| Total: XX | Filtered: XX | Selected: XX            |
++---------------------------------------------------+
+| [ ] | Account Name | Status | Parent | Active Since | Last Login | Operations |
+| [ ] | Account1     | Active | -      | 2024-01-01  | 2026-07-01 | [Edit][Deactivate] |
+| [ ] | Account2     | Active | Acc1   | 2024-06-15  | 2026-06-30 | [Edit][Deactivate] |
++---------------------------------------------------+
+| Show [20] records per page   [< 1 2 3 >]          |
++---------------------------------------------------+
+```
+
+| 列名 | 排序 | 筛选 | 说明 |
+|------|------|------|------|
+| (checkbox) | NO | NO | 行选择（支持批量操作） |
+| Account Name | YES | YES | 账户名称 |
+| Status | YES | YES | Active / Inactive |
+| Parent | YES | YES | 上级账户（展示层级关系） |
+| Active Since | YES | NO | 激活时间 |
+| Last Login | YES | NO | 最后登录时间 |
+| Operations | NO | NO | 编辑 / 停用 操作按钮 |
+
+#### 2-2. 添加/编辑账户表单
+
+**路由:** `/accounts/add` / `/accounts/{id}/edit`
+**所需权限:** ADMIN_Account
+
+```
++---------------------------------------------------+
+| Customers > Add Account                            |
++---------------------------------------------------+
+| +----------------------+ +----------------------+  |
+| | General Info         | | Address              |  |
+| | Account Name *  [__] | | Contact Name    [__] |  |
+| | Parent Account* [v]  | | Address         [__] |  |
+| | Account Type *  ( ) Reseller                   |  |
+| |                 ( ) Customer                   |  |
+| | Default Email * [__] | | City            [__] |  |
+| | Currency *      [v]  | | State/Region    [__] |  |
+| | Tax ID          [__] | | Postal/Zip Code [__] |  |
+| | Billing Disc.   [__] | | Country *       [v]  |  |
+| | Disclaimer Text [__] | | Phone Number    [__] |  |
+| +----------------------+ +----------------------+  |
+|              [ Save ]   [ Cancel ]                  |
++---------------------------------------------------+
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| Account Name | 文本输入 | * | 全局唯一 |
+| Parent Account | Search by Name 下拉 | * | 仅 root/reseller 可选，customer 不可选父账户 |
+| Account Type | Radio | * | Reseller / Customer（root 不可创建） |
+| Default Email | 文本输入 | * | 系统通知邮箱 |
+| Currency | 下拉选择 | * | CNY / EUR / USD |
+| Tax ID | 文本输入 | | 税务标识 |
+| Billing Disclaimer | 文本域 | | 账单免责声明 |
+| Contact Name | 文本输入 | | 联系人姓名 |
+| Address | 文本域 | | 详细地址 |
+| City | 文本输入 | | 城市 |
+| State or Region | 文本输入 | | 省份/地区 |
+| Postal / Zip Code | 文本输入 | | 邮政编码 |
+| Country | 下拉选择 | * | 国家 |
+| Phone Number | 文本输入 | | 联系电话 |
+
+---
+
+### 3. 用户管理页面
+
+#### 3-1. 用户列表页
+
+**路由:** `/users`
+**所需权限:** ADMIN_User
+
+```
++---------------------------------------------------+
+| Customers > All Users                [+ Add User] [Help] |
++---------------------------------------------------+
+| Search by Username: [________] [Search]            |
++---------------------------------------------------+
+| Total: XX | Filtered: XX | Selected: XX            |
++---------------------------------------------------+
+| [ ] | Username | Email | Status | Accounts | Roles | Active Since | Last Login |
+| [ ] | user1    | u1@x  | Active | Acc1     | ADMIN | 2024-01-01  | 2026-07-01 |
++---------------------------------------------------+
+| Show [10] records per page   [< 1 2 3 >]          |
++---------------------------------------------------+
+```
+
+| 列名 | 排序 | 筛选 | 说明 |
+|------|------|------|------|
+| (checkbox) | NO | NO | 行选择 |
+| Username | YES | YES | 用户名 |
+| Email | YES | YES | 邮箱 |
+| Status | YES | YES | Active / Inactive |
+| Accounts | NO | YES | 关联账户 |
+| Roles | NO | YES | 角色/权限组 |
+| Active Since | YES | NO | 激活时间 |
+| Last Login | YES | NO | 最后登录时间 |
+
+#### 3-2. 添加/编辑用户表单
+
+**路由:** `/users/add` / `/users/{id}/edit`
+**所需权限:** ADMIN_User
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| Username | 文本输入 | * | 账户内唯一 |
+| Default Email | 文本输入 | * | 密码重置、告警、通知 |
+| Select Account | Search by Name 下拉 | * | 用户归属账户 |
+| Select Roles | 多选下拉 | | 可多选权限组 |
+| Time Zone | 自动补全输入 | | 如 Asia/Shanghai，支持输入联想 |
+| Choose Language | 下拉选择 | * | English / 简体中文 / 繁体中文 |
+
+---
+
+### 4. SIM & Profile 资产列表页
+
+**路由:** `/assets/sim`
+**所需权限:** read_SIM
+
+```
++---------------------------------------------------+
+| Subscriptions > All Subscribers                       [Help] |
++---------------------------------------------------+
+| Search by ICCID: [________] [Search]               |
++---------------------------------------------------+
+| Total: XX | Filtered: XX | Selected: XX            |
++---------------------------------------------------+
+| [ ] | SubscriberID# | Name | Group | Account | MSISDN | Profile Category | Profile Name | SIM Network Status | Product Name | Last EID |
++---------------------------------------------------+
+| Show [20] records per page   [< 1 2 3 >]          |
++---------------------------------------------------+
+```
+
+| 列名 | 排序 | 筛选 | 说明 |
+|------|------|------|------|
+| (checkbox) | NO | NO | 行选择 |
+| SubscriberID# | YES | YES | ICCID（资产唯一标识） |
+| Name | YES | YES | 资产名称 |
+| Group | YES | YES | 分组名称 |
+| Account | YES | YES | 归属账户 |
+| MSISDN | YES | YES | 电话号码 |
+| Profile Category | NO | YES | Profile 类别 |
+| Profile Name | YES | YES | Profile 名称 |
+| SIM Network Status | YES | YES | 网络状态（Installed/Activated/Suspended 等） |
+| Product Name | YES | YES | 当前订阅套餐名称 |
+| Last EID | NO | NO | 最后关联 EID |
+
+---
+
+### 5. SIM & Profile 单资产详情页
+
+**路由:** `/assets/sim/{iccid}`
+**所需权限:** read_SIM（查看）/ ADMIN_SIM（操作）/ read_CDR（话单）
+
+```
++---------------------------------------------------+
+| Subscriptions > SIM Info: {iccid}      [< Back]    |
++---------------------------------------------------+
+| +-------------------------------+ +--------------+ |
+| | SIM Info                      | |Actions       | |
+| | SIM Name:       [unnamed]     | |[Run SIM      | |
+| | Group:          [-]           | | diagnostics] | |
+| | ICCID:          {value}       | |[Terminate]   | |
+| | IMSI:           [-]           | |[Edit SIM]    | |
+| | MSISDN:         [-]           | |Change Status | |
+| | Virtual MSISDN: [-]           | |  [v]         | |
+| | Original MSISDN:[-]           | |[Wake-up      | |
+| | Profile Type:   [-]           | | Voice Call]  | |
+| | IMEISV:         [-]           | |[Send SMS]    | |
+| | Product Name:   [-]           | |[Change SID]  | |
+| | Product Type:   PerMb         | |[Change       | |
+| | Data Used:      0.04MB        | | ProfileType] | |
+| | Lowest Data     200.00MB      | +--------------+ |
+| | Limit:                        | |Subscription  | |
+| | Data Limit:     [-]           | |Actions       | |
+| | SMS Limit:      0             | |[Subscribe]   | |
+| +-------------------------------+ |[Suspend]     | |
+| | Connection Info               | |[Unsuspend]   | |
+| | Status:         {status}      | |[Unsubscribe] | |
+| | Activation Date:{date}        | |[Resubscribe] | |
+| | Contract Exp:   [-]           | +--------------+ |
+| | Last Sub Date:  {date}        |                  |
+| | Last Susp Date: [-]           |                  |
+| | Last React Date:[-]           |                  |
+| | Last Transfer:  {date}        |                  |
+| | Last Connection:{date}        |                  |
+| | Last Network:   China/联通     |                  |
+| | Last SMS:       [-]           |                  |
+| +-------------------------------+                  |
+| | Alerts                                         | |
+| | + Add Alert                                    | |
+| | When | Alert Option | Amount | Actions         | |
+| | Default Email: [user@x.com]                    | |
+| | + Add alternative email [________]             | |
+| | [Apply Changes]                                | |
+| +------------------------------------------------+ |
++---------------------------------------------------+
+```
+
+**SIM Info 区块字段：**
+
+| 字段 | 说明 |
+|------|------|
+| SIM Name | 资产名称，可编辑 |
+| Group | 分组名称 |
+| ICCID | 资产唯一标识 |
+| IMSI | 国际移动用户识别码 |
+| MSISDN | 电话号码 |
+| Virtual MSISDN | 虚拟 MSISDN |
+| Original MSISDN | 原始 MSISDN |
+| Profile Type | Profile 类型 |
+| IMEISV | 设备软件版本 |
+| Product Name | 当前套餐名称 |
+| Product Type | 套餐类型（PerMb / DataPool 等） |
+| Data Used | 已使用流量 |
+| Lowest Data Limit | 最低数据限制 |
+| Data Limit | 当前数据限制 |
+| SMS Limit | 短信限制 |
+
+**Connection Info 区块字段：**
+
+| 字段 | 说明 |
+|------|------|
+| Status | 资产状态 |
+| Activation Date | 激活时间 |
+| Contract Expiration Date | 合同到期日 |
+| Last Subscription Date | 最后订阅时间 |
+| Last Suspension Date | 最后暂停时间 |
+| Last Reactivation Date | 最后恢复时间 |
+| Last Transferred Date | 最后转移时间 |
+| Last Connection | 最后连接时间 |
+| Last Network | 最后登录网络（MCC + MNC + 运营商名） |
+| Last SMS | 最后短信时间 |
+
+**右侧 Actions 操作按钮：**
+
+| 按钮 | 所需权限 | 对应 API |
+|------|----------|----------|
+| Run SIM diagnostics | read_SIM | GET /assets/{iccid}/diagnostic |
+| Terminate | ADMIN_Plan | PUT /assets/{iccid}/terminate |
+| Edit this SIM | ADMIN_SIM | PUT /assets/{iccid} |
+| Change SIM Status (下拉) | ADMIN_SIM | PUT /assets/{iccid} |
+| Wake-up Voice Call | ADMIN_SIM | POST /assets/{iccid}/dial |
+| Send SMS | ADMIN_SIM | POST /assets/{iccid}/sms |
+| Change SID | ADMIN_SIM | POST /assets/{iccid}/sid |
+| Change Profile Type | ADMIN_SIM | PUT /assets/{iccid}/dpprofiletype |
+
+**右侧 Subscription Actions：**
+
+| 按钮 | 所需权限 | 对应 API |
+|------|----------|----------|
+| Subscribe | ADMIN_Plan | PUT /assets/{iccid}/subscribe |
+| Suspend | ADMIN_Plan | PUT /assets/{iccid}/suspend |
+| Unsuspend | ADMIN_Plan | PUT /assets/{iccid}/unsuspend |
+| Unsubscribe | ADMIN_Plan | PUT /assets/{iccid}/unsubscribe |
+| Resubscribe | ADMIN_Plan | PUT /assets/{iccid}/resubscribe |
+
+**Alerts 告警设置区块：**
+
+| 元素 | 说明 |
+|------|------|
+| + Add Alert 按钮 | 添加告警规则 |
+| Alert 表格 | When（触发条件）、Alert Option（告警类型）、Amount（阈值）、Actions（删除） |
+| Default Email | 只读显示当前通知邮箱 |
+| + Add alternative email | 添加备用邮箱 |
+| Apply Changes | 提交告警修改 |
+
+---
+
+### 6. eSIM 资产列表页
+
+**路由:** `/assets/esim`
+**所需权限:** read_eSIM
+
+```
++---------------------------------------------------+
+| Subscriptions > eSIM Management                      [Help] |
++---------------------------------------------------+
+| Search by eSIMID#, name...: [________] [Search]    |
++---------------------------------------------------+
+| Total: XX | Filtered: XX | Selected: XX            |
++---------------------------------------------------+
+| [ ] | eSIMID# | Type | eSIM Name | eSIM Group | eSIM Account | Enabled Profile | Profiles | Status | Profile ID# | Profile Name | Batch Name |
++---------------------------------------------------+
+| Show [10] records per page   [< 1 2 3 >]          |
++---------------------------------------------------+
+```
+
+| 列名 | 排序 | 筛选 | 说明 |
+|------|------|------|------|
+| (checkbox) | NO | NO | 行选择 |
+| eSIMID# | YES | YES | EID（eSIM 唯一标识） |
+| Type | NO | YES | IoT / M2M / Consumer |
+| eSIM Name | YES | YES | eSIM 名称 |
+| eSIM Group | YES | YES | eSIM 分组 |
+| eSIM Account | YES | YES | 归属账户 |
+| Enabled Profile | YES | NO | 当前启用 Profile 的 ICCID |
+| Profiles | NO | NO | Profile 总数 |
+| Status | YES | YES | eSIM 状态 |
+| Profile ID# | YES | YES | Profile ID |
+| Profile Name | YES | YES | Profile 名称 |
+| Batch Name | NO | YES | 批次名称 |
+
+---
+
+### 7. eSIM 单资产详情页
+
+**路由:** `/assets/esim/{eid}`
+**所需权限:** read_eSIM（查看）/ ADMIN_eSIM（操作）
+
+```
++---------------------------------------------------+
+| Subscriptions > eSIM Info: {eid}      [< Back]     |
++---------------------------------------------------+
+| +-------------------------------+ +--------------+ |
+| | IoT eSIM Info                 | |Device Actions| |
+| | eSIM Name: [-]               | |[Update eSIM] | |
+| | Account: {name}              | |[Refresh eSIM | |
+| | Group: [-]                   | | Order]       | |
+| | Type: IoT                    | |[Download     | |
+| | eSIM ID#: {eid}              | | Profile]     | |
+| | eSIM Group: [-]              | +--------------+ |
+| | Enabled Profile: {iccid}     | |Subscription  | |
+| +-------------------------------+ | Actions      | |
+| | Profiles                      | |[Subscribe]   | |
+| | ProfileType|Comm|Enabled|...  | |[Suspend]     | |
+| +-------------------------------+ |[Unsuspend]   | |
+| | eIM SGP.32 Metadata           | |[Unsubscribe] | |
+| | General:                      | |[Resubscribe] | |
+| | IPA Mode: [-]                | +--------------+ |
+| | Comm Protocol: [-]           |                  |
+| | IoT Specific:                 |                  |
+| | CoT Supported: [-]           |                  |
+| | Fallback Supported: [-]      |                  |
+| | eIM Version: [-]             |                  |
+| | Comm Dates:                   |                  |
+| | Last Customer Comm: [-]       |                  |
+| | Last eIM Comm: [-]            |                  |
+| +-------------------------------+                  |
+| | eIM Info List                                   | |
+| | Group | Type | EID                             | |
+| +------------------------------------------------+ |
+| | SIM Profile IoT Info                            | |
+| | Account | Group | ICCID | Profile Status...     | |
+| +------------------------------------------------+ |
++---------------------------------------------------+
+```
+
+**IoT eSIM Info 区块：**
+
+| 字段 | 说明 |
+|------|------|
+| eSIM Name | 可编辑 |
+| Account | 归属账户 |
+| Group | 分组名称 |
+| Type | IoT / M2M / Consumer |
+| eSIM ID# | EID |
+| eSIM Group | eSIM 分组名 |
+| Enabled Profile | 当前启用 Profile 的 ICCID |
+
+**Profiles 表格列：**
+
+| 列名 | 说明 |
+|------|------|
+| Profile Type | bootprofile / virtual |
+| Comm. Data | 通信数据 |
+| Enabled Data | 启用数据 |
+| Active Rule | 激活规则 |
+| Profile Status | Profile 状态 |
+
+**eIM SGP.32 Metadata 区块：**
+
+| 子区块 | 字段 |
+|--------|------|
+| General | IPA Mode, Communication Protocol |
+| IoT Specific Info | CoT Supported, Fallback Supported, eIM Version |
+| Communication Dates | Last Customer Communication Date, Last eIM Communication Date |
+| IPA Capabilities | 可折叠展开 |
+| Technical Details | 可折叠展开 |
+
+**eIM Info List 表格列：**
+
+| 列名 | 说明 |
+|------|------|
+| Group | 分组 |
+| Type | 类型 |
+| EID | EID 标识 |
+
+**右侧 Device Actions：**
+
+| 按钮 | 对应 API |
+|------|----------|
+| Update an eSIM | PUT /esims/{eid} |
+| Refresh eSIM Order | GET /esims/{eid}/euiccsync-euicc-info |
+| Download Profile | POST /esims/{eid}/download-profile |
+| Enable Profile | POST /esims/{eid}/enable-profile |
+| Disable Profile | POST /esims/{eid}/disable-profile |
+| Delete Profile | POST /esims/{eid}/delete-profile |
+| Audit eSIM | POST /esims/{eid}/audit |
+
+---
+
+### 通用 UI 模式总结
+
+| 页面类型 | 布局结构 |
+|----------|----------|
+| 列表页 | 面包屑导航 + 页面标题 + 操作按钮区（右上） + 搜索/筛选栏 + 统计信息行（Total/Filtered/Selected） + 数据表格（含 checkbox 列） + 底部分页（Show N records） |
+| 仪表盘 | 无面包屑 + Widget 网格（2列xN行） + 每个 Widget 可独立操作 + 右上角 Reset/Add Widget |
+| 表单页 | 面包屑 + 分区标题（左栏 General Info + 右栏 Address） + 字段（必填标 *） + 底部 Save/Cancel |
+| 详情页 | 面包屑 + Back 按钮 + 左栏信息区块（可折叠/可展开） + 右栏操作面板（按功能分组） |
+| 通用元素 | 搜索框 + 搜索按钮 / 表格分页 Show N records / 操作按钮在右上角或行内 / 必填字段标记 * |
+
+---
+
 ## References
 
 [^1]: (Original Document) — `CMP需求说明(V1.0.2).docx` from [local_cmp](https://github.com/YangYang990706/local_cmp)
