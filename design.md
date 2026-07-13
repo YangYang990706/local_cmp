@@ -816,27 +816,208 @@ Authorization: Bearer <token>
 | PUT | `/api/resource-providers/{id}/enable` | ADMIN_Resource | 启用资源方 |
 | PUT | `/api/resource-providers/{id}/disable` | ADMIN_Resource | 停用资源方 |
 
-#### 资产 — SIM
+#### 资产 — SIM（对接 POD /assets 模块，基于 POD API v3.6）
 
-| 方法 | 路径 | 权限 | 说明 |
-|------|------|------|------|
-| GET | `/api/assets/sim` | read_SIM | SIM 列表（分页/排序/筛选） |
-| GET | `/api/assets/sim/{iccid}` | read_SIM | SIM 详情 |
-| PUT | `/api/assets/sim/{iccid}/status` | ADMIN_SIM | 修改资产状态 |
-| PUT | `/api/assets/sim/{iccid}/name` | ADMIN_SIM | 修改资产名称 |
-| POST | `/api/assets/sim/{iccid}/sync` | read_SIM | 向资源方同步 card info |
-| POST | `/api/assets/sim/{iccid}/cdr` | read_CDR | 获取该资产话单 |
-| DELETE | `/api/assets/sim/{iccid}` | ADMIN_SIM | 删除资产 |
+POD 的 `assets` 模块共计 37 个端点，覆盖 SIM 卡的完整生命周期管理。以下为 local_cmp 对接资源方时的完整 API 映射：
 
-#### 资产 — eSIM
+**列表与查询：**
 
-| 方法 | 路径 | 权限 | 说明 |
-|------|------|------|------|
-| GET | `/api/assets/esim` | read_eSIM | eSIM 列表 |
-| GET | `/api/assets/esim/{eid}` | read_eSIM | eSIM 详情 |
-| PUT | `/api/assets/esim/{eid}/status` | ADMIN_eSIM | 修改状态 |
-| PUT | `/api/assets/esim/{eid}/name` | ADMIN_eSIM | 修改名称 |
-| DELETE | `/api/assets/esim/{eid}` | ADMIN_eSIM | 删除 |
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| GET | `/api/assets/sim` | `GET /assets` | read_SIM | SIM 列表（支持多维度查询筛选，分页，排序） |
+| GET | `/api/assets/sim/{iccid}` | `GET /assets/{iccid}` | read_SIM | SIM 详情（标签、状态、运营商、套餐等全量信息） |
+| GET | `/api/assets/sim/{iccid}/diagnostic` | `GET /assets/{iccid}/diagnostic` | read_SIM | SIM 诊断（网络状态、最后连接时间、最后数据传输） |
+| GET | `/api/assets/sim/{iccid}/location` | `GET /assets/{iccid}/location` | read_SIM | SIM 位置查询 |
+| GET | `/api/assets/sim/{iccid}/sessions` | `GET /assets/{iccid}/sessions` | read_SIM | SIM 会话记录 |
+| GET | `/api/assets/sim/{iccid}/sm-ds-servers` | `GET /assets/{iccid}/sm-ds-servers` | read_SIM | 获取 SM-DS 服务器列表（eSIM Profile 下载专用） |
+| GET | `/api/assets/sim/{iccid}/esim-events` | `GET /assets/{iccid}/esim-events` | read_eSIM | SGP.22 事件日志（Consumer eSIM Profile 专用） |
+
+**SIM 列表查询参数（`GET /api/assets/sim`）：**
+
+| 参数 | 类型 | POD 参数 | 说明 |
+|------|------|----------|------|
+| accountId | string | queryAccountId | 所属账户 |
+| iccid | string | queryIccid | ICCID 筛选 |
+| imsi | string | queryImsi | IMSI 筛选 |
+| msisdn | string | queryMsisdn | MSISDN 筛选 |
+| name | string | queryName | 资产名称筛选 |
+| accountName | string | queryAccountName | 账户名称筛选 |
+| status | string | queryStatus | 状态筛选 |
+| type | string | queryType | 类型筛选（SIM / eSIM Profile M2M / eSIM Profile Consumer） |
+| ownership | string | queryOwnership | 归属关系筛选 |
+| profileState | string | queryProfileState | Profile 状态筛选 |
+| activationDate | string | queryActivationDate | 激活日期筛选 |
+| subscriptionDate | string | querySubscriptionDate | 订阅日期筛选 |
+| lastConnection | string | queryLastConnection | 最后连接时间 |
+| usage | string | queryUsage | 用量筛选 |
+| product | string | queryProduct | 套餐筛选 |
+| inOveruse | string | queryInOveruse | 超量筛选 |
+| carriers | string | queryCarriers | 运营商筛选 |
+| securityService | string | querySecurityService | 安全服务筛选 |
+| smartFilter | string | querySmartFilter | 高级筛选 |
+| ownerAccountId | string | queryOwnerAccountId | 资产归属账户 ID |
+| limit | integer | queryLimit | 每页条数（默认 20） |
+| page | integer | queryPage | 页码 |
+| sort | string | querySort | 排序字段 |
+| order | string | queryOrder | 排序方向（asc/desc） |
+| format | string | queryFormat | 响应格式 |
+
+**生命周期管理操作：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| POST | `/api/assets/sim` | `POST /assets` | ADMIN_SIM | 创建资产（须提供 accountId、iccid、carriers） |
+| PUT | `/api/assets/sim/{iccid}/groupname` | `PUT /assets/{iccid}/groupname` | ADMIN_SIM | 更新分组名称 |
+| PUT | `/api/assets/sim/{iccid}/dpprofiletype` | `PUT /assets/{iccid}/dpprofiletype` | ADMIN_SIM | 设置 dpProfileType（资产分类标记） |
+| DELETE | `/api/assets/sim/{iccid}/external` | `DELETE /assets/{iccid}/external` | ADMIN_SIM | 删除外部资产（SGP.32 eSIM Profile） |
+| POST | `/api/assets/sim/{iccid}/transfer` | `POST /assets/{iccid}/transfer` | ADMIN_SIM | 转移资产到其他账户 |
+| POST | `/api/assets/sim/{iccid}/return` | `POST /assets/{iccid}/return` | ADMIN_SIM | 归还资产到上级账户 |
+
+**套餐操作（订阅/退订/暂停/恢复/更换/终止）：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| PUT | `/api/assets/sim/{iccid}/subscribe` | `PUT /assets/{iccid}/subscribe` | ADMIN_Plan | 激活资产并订阅套餐（需提供 productId） |
+| PUT | `/api/assets/sim/{iccid}/unsubscribe` | `PUT /assets/{iccid}/unsubscribe` | ADMIN_Plan | 退订套餐 |
+| PUT | `/api/assets/sim/{iccid}/terminate` | `PUT /assets/{iccid}/terminate` | ADMIN_Plan | 终止套餐（与 unsubscribe 不同，terminate 立即生效） |
+| PUT | `/api/assets/sim/{iccid}/resubscribe` | `PUT /assets/{iccid}/resubscribe` | ADMIN_Plan | 更换套餐（移除旧订阅并创建新订阅） |
+| PUT | `/api/assets/sim/{iccid}/suspend` | `PUT /assets/{iccid}/suspend` | ADMIN_Plan | 暂停资产服务 |
+| PUT | `/api/assets/sim/{iccid}/unsuspend` | `PUT /assets/{iccid}/unsuspend` | ADMIN_Plan | 恢复暂停资产 |
+
+**运维与管理操作：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| PUT | `/api/assets/sim/{iccid}/alerts` | `PUT /assets/{iccid}/alerts` | ADMIN_SIM | 设置用量告警（data alerts + sms alerts） |
+| POST | `/api/assets/sim/{iccid}/purge` | `POST /assets/{iccid}/purge` | ADMIN_SIM | 网络刷新（强制更新位置，重置网络连接） |
+| POST | `/api/assets/sim/{iccid}/sms` | `POST /assets/{iccid}/sms` | ADMIN_SIM | 发送短信（最多 160 个字符） |
+| POST | `/api/assets/sim/{iccid}/limit` | `POST /assets/{iccid}/limit` | ADMIN_SIM | 设置用量限制（data limit/datalimit 或 smslimit） |
+| POST | `/api/assets/sim/{iccid}/tags` | `POST /assets/{iccid}/tags` | ADMIN_SIM | 设置自定义标签（带索引的键值对） |
+| POST | `/api/assets/sim/{iccid}/reallocate-ip` | `POST /assets/{iccid}/reallocate-ip` | ADMIN_SIM | 重新分配固定 IP |
+| POST | `/api/assets/sim/{iccid}/swapMSISDN` | `POST /assets/{iccid}/swapMSISDN` | ADMIN_SIM | MSISDN 交换（将虚拟 MSISDN 迁至另一 SIM） |
+| POST | `/api/assets/sim/{iccid}/sid` | `POST /assets/{iccid}/sid` | ADMIN_SIM | 修改 SID（服务标识） |
+
+**Multi-IMSI 与通话操作：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| POST | `/api/assets/sim/{iccid}/download-imsi` | `POST /assets/{iccid}/download-imsi` | ADMIN_SIM | 下载新 IMSI 到 SIM（切换运营商） |
+| POST | `/api/assets/sim/{iccid}/disable-imsi` | `POST /assets/{iccid}/disable-imsi` | ADMIN_SIM | 禁用 SIM 上的辅助 IMSI |
+| POST | `/api/assets/sim/{iccid}/delete-imsi` | `POST /assets/{iccid}/delete-imsi` | ADMIN_SIM | 从 SIM 上删除 IMSI |
+| POST | `/api/assets/sim/{iccid}/enable-stk-menu` | `POST /assets/{iccid}/enable-stk-menu` | ADMIN_SIM | 启用 Multi-IMSI STK 菜单 |
+| POST | `/api/assets/sim/{iccid}/disable-stk-menu` | `POST /assets/{iccid}/disable-stk-menu` | ADMIN_SIM | 禁用 Multi-IMSI STK 菜单 |
+| POST | `/api/assets/sim/{iccid}/quick-dial` | `POST /assets/{iccid}/quick-dial` | ADMIN_SIM | 添加快捷拨号 |
+| POST | `/api/assets/sim/{iccid}/dial` | `POST /assets/{iccid}/dial` | ADMIN_SIM | 发起 MT 语音呼叫（P2P 唤醒） |
+
+**eSIM Consumer Profile 操作（仅 iCCID 归属为 Consumer eSIM Profile 时可用）：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| POST | `/api/assets/sim/{iccid}/download-confirm` | `POST /assets/{iccid}/download-confirm` | ADMIN_SIM | 启动 Download and Confirm（Consumer eSIM 下载并安装） |
+| POST | `/api/assets/sim/{iccid}/cancel-relaxed` | `POST /assets/{iccid}/cancel-relaxed` | ADMIN_SIM | 取消待处理的下载订单（宽松模式） |
+| POST | `/api/assets/sim/{iccid}/rebuild` | `POST /assets/{iccid}/rebuild` | ADMIN_SIM | 同步并重建 Consumer eSIM Profile |
+
+#### 资产 — eSIM（对接 POD /esims 模块，基于 POD API v3.6）
+
+POD 的 `esims` 模块共计 34 个端点，覆盖 eSIM 设备及 Profile 的完整生命周期，包括 SGP.02 (M2M)、SGP.22 (Consumer) 和 SGP.32 (IoT) 三种规范的支持。以下为 local_cmp 对接资源方时的完整 API 映射：
+
+**列表与查询：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| GET | `/api/assets/esim` | `GET /esims` | read_eSIM | eSIM 列表（支持多维度查询筛选，分页，排序） |
+| GET | `/api/assets/esim/{eid}` | `GET /esims/{eid}` | read_eSIM | eSIM 详情（含 Profile 列表、启用 Profile、标签等） |
+| GET | `/api/assets/esim/{eid}/euiccsync-euicc-info` | `GET /esims/{eid}/euiccsync-euicc-info` | read_eSIM | 从 eIM 同步 eUICC 元数据和 Profile 信息（SGP.32） |
+| GET | `/api/assets/esim/{eid}/events` | `GET /esims/{eid}/events` | read_eSIM | eSIM 事件列表（SGP.32，支持 JSON/CSV 导出） |
+
+**eSIM 列表查询参数（`GET /api/assets/esim`）：**
+
+| 参数 | 类型 | POD 参数 | 说明 |
+|------|------|----------|------|
+| accountId | string | queryAccountId | 所属账户 |
+| eid | string | queryEid | EID 筛选 |
+| esimName | string | queryEsimName | eSIM 名称筛选 |
+| esimGroupName | string | queryEsimGroupName | eSIM 分组名称筛选 |
+| accountName | string | queryAccountName | 账户名称筛选 |
+| enabledProfileIccid | string | queryEnabledProfileIccid | 启用 Profile ICCID 筛选 |
+| enabledProfileName | string | queryEnabledProfileName | 启用 Profile 名称 |
+| enabledProfileMsisdn | string | queryEnabledProfileMsisdn | 启用 Profile MSISDN |
+| enabledProfileInOveruse | string | queryEnabledProfileInOveruse | 启用 Profile 超量筛选 |
+| enabledProfileStatus | string | queryEnabledProfileStatus | 启用 Profile 状态 |
+| enabledProfileProduct | string | queryEnabledProfileProduct | 启用 Profile 套餐 |
+| enabledProfileActivationDate | string | queryEnabledProfileActivationDate | 启用 Profile 激活日期 |
+| enabledProfileSuspensionDate | string | queryEnabledProfileSuspensionDate | 启用 Profile 暂停日期 |
+| enabledProfileLastConnection | string | queryEnabledProfileLastConnection | 启用 Profile 最后连接 |
+| enabledProfileLocation | string | queryEnabledProfileLocation | 启用 Profile 位置 |
+| enabledProfileImsisType | string | queryEnabledProfileImsisType | 启用 Profile IMSI 类型 |
+| enabledProfileCarriers | string | queryEnabledProfileCarriers | 启用 Profile 运营商 |
+| enabledProfileBootstrap | string | queryEnabledProfileBootstrap | 启用 Profile Bootstrap |
+| profilesStatus | string | queryProfilesStatus | Profile 状态筛选 |
+| minProfiles | string | queryMinProfiles | 最小 Profile 数量 |
+| type | string | queryType | eSIM 类型 |
+| ownerAccountId | string | queryOwnerAccountId | 资产归属账户 |
+| smart | string | querySmart | 高级筛选 |
+| limit | integer | queryLimit | 每页条数（默认 20） |
+| page | integer | queryPage | 页码 |
+| sort | string | querySort | 排序字段 |
+| order | string | queryOrder | 排序方向（asc/desc） |
+| format | string | queryFormat | 响应格式 |
+| maxCount | boolean | maxCount | 返回最大计数值 |
+
+**生命周期管理操作：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| POST | `/api/assets/esim` | `POST /esims` | ADMIN_eSIM | 创建 eSIM（须提供 accountId、eid、profiles 数组，可指定 eSimName、eSimGroupName） |
+| POST | `/api/assets/esim/{eid}/tags` | `POST /esims/{eid}/tags` | ADMIN_eSIM | 设置 eSIM 自定义标签 |
+| POST | `/api/assets/esim/{eid}/transfer` | `POST /esims/{eid}/transfer` | ADMIN_eSIM | 转移 eSIM 到其他账户 |
+| POST | `/api/assets/esim/{eid}/return` | `POST /esims/{eid}/return` | ADMIN_eSIM | 归还 eSIM 到上级账户（可指定是否归还 Profile） |
+
+**启用 Profile 套餐操作：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| PUT | `/api/assets/esim/{eid}/subscribe` | `PUT /esims/{eid}/subscribe` | ADMIN_Plan | 激活启用 Profile 并订阅套餐 |
+| PUT | `/api/assets/esim/{eid}/unsubscribe` | `PUT /esims/{eid}/unsubscribe` | ADMIN_Plan | 启用 Profile 退订套餐 |
+| PUT | `/api/assets/esim/{eid}/resubscribe` | `PUT /esims/{eid}/resubscribe` | ADMIN_Plan | 启用 Profile 更换套餐 |
+| PUT | `/api/assets/esim/{eid}/suspend` | `PUT /esims/{eid}/suspend` | ADMIN_Plan | 暂停启用 Profile |
+| PUT | `/api/assets/esim/{eid}/unsuspend` | `PUT /esims/{eid}/unsuspend` | ADMIN_Plan | 恢复启用 Profile |
+
+**运维与管理操作：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| PUT | `/api/assets/esim/{eid}/alerts` | `PUT /esims/{eid}/alerts` | ADMIN_eSIM | 设置启用 Profile 告警（data alerts + sms alerts） |
+| POST | `/api/assets/esim/{eid}/purge` | `POST /esims/{eid}/purge` | ADMIN_eSIM | 启用 Profile 网络刷新 |
+| POST | `/api/assets/esim/{eid}/sms` | `POST /esims/{eid}/sms` | ADMIN_eSIM | 向启用 Profile 发送短信 |
+| POST | `/api/assets/esim/{eid}/limit` | `POST /esims/{eid}/limit` | ADMIN_eSIM | 设置启用 Profile 用量限制 |
+| POST | `/api/assets/esim/{eid}/audit` | `POST /esims/{eid}/audit` | ADMIN_eSIM | eSIM 审计（审计 eSIM 及所有已下载 Profile，支持 callback） |
+
+**eSIM Profile 操作（SGP.02 M2M + SGP.22 Consumer）：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| POST | `/api/assets/esim/{eid}/download-profile` | `POST /esims/{eid}/download-profile` | ADMIN_eSIM | 下载并安装 Profile 到 eSIM（SGP.02 ES2+ / SGP.22 ES9+） |
+| POST | `/api/assets/esim/{eid}/enable-profile` | `POST /esims/{eid}/enable-profile` | ADMIN_eSIM | 启用已安装的 Profile（从 Disabled → Enabled） |
+| POST | `/api/assets/esim/{eid}/disable-profile` | `POST /esims/{eid}/disable-profile` | ADMIN_eSIM | 禁用已安装的 Profile（从 Enabled → Disabled） |
+| POST | `/api/assets/esim/{eid}/delete-profile` | `POST /esims/{eid}/delete-profile` | ADMIN_eSIM | 删除 eSIM 上的一个或多个 Profile |
+
+**SGP.32 IoT eSIM 专用操作：**
+
+| 方法 | CMP 路径 | POD 对应路径 | 权限 | 说明 |
+|------|----------|-------------|------|------|
+| POST | `/api/assets/esim/{eid}/immediate-enable-flag` | `POST /esims/{eid}/immediate-enable-flag` | ADMIN_eSIM | 设置立即启用标志配置（SGP.32） |
+| POST | `/api/assets/esim/{eid}/fallback-mgmt` | `POST /esims/{eid}/fallback-mgmt` | ADMIN_eSIM | 管理 fallback profile（启用/禁用 SGP.32 fallback 属性） |
+| POST | `/api/assets/esim/{eid}/ecoadd` | `POST /esims/{eid}/ecoadd` | ADMIN_eSIM | 向 IoT eSIM 添加 EIM（注册 eIM，SGP.32） |
+| POST | `/api/assets/esim/{eid}/ecoupdate` | `POST /esims/{eid}/ecoupdate` | ADMIN_eSIM | 更新 IoT eSIM 的 EIM 配置（SGP.32） |
+| POST | `/api/assets/esim/{eid}/ecodelete` | `POST /esims/{eid}/ecodelete` | ADMIN_eSIM | 从 IoT eSIM 删除 EIM（SGP.32） |
+| POST | `/api/assets/esim/{eid}/ecolist` | `POST /esims/{eid}/ecolist` | ADMIN_eSIM | 列出 IoT eSIM 已注册的所有 EIM（SGP.32） |
+| POST | `/api/assets/esim/{eid}/euiccupdate-metadata` | `POST /esims/{eid}/euiccupdate-metadata` | ADMIN_eSIM | 更新 eUICC 元数据（SGP.32） |
+| POST | `/api/assets/esim/{eid}/euiccset-default-dp-address` | `POST /esims/{eid}/euiccset-default-dp-address` | ADMIN_eSIM | 设置 eUICC 默认 DP 地址（SGP.32） |
+| POST | `/api/assets/esim/{eid}/euiccupdate-status` | `POST /esims/{eid}/euiccupdate-status` | ADMIN_eSIM | 更新 eUICC 状态（激活/非激活，SGP.32） |
+| POST | `/api/assets/esim/{eid}/euiccregister` | `POST /esims/{eid}/euiccregister` | ADMIN_eSIM | 注册 eUICC 到 eIM（IoT only，SGP.32） |
+| POST | `/api/assets/esim/{eid}/euiccunregister` | `POST /esims/{eid}/euiccunregister` | ADMIN_eSIM | 从 eIM 注销 eUICC（IoT only，SGP.32） |
+| POST | `/api/assets/esim/{eid}/operationcancel` | `POST /esims/{eid}/operationcancel` | ADMIN_eSIM | 取消 IoT eSIM 的待处理操作（按 transactionId） |
 
 #### 资产 — Profile
 
@@ -1047,4 +1228,6 @@ Authorization: Bearer <token>
 ## References
 
 [^1]: (Original Document) — `CMP需求说明(V1.0.2).docx` from [local_cmp](https://github.com/YangYang990706/local_cmp)
-[^2]: (POD API) — [IOT Suite Swagger UI](https://podiotsuite.com)
+[^2]: (POD API) — `POD API.txt` based on AirOn360 IoT Suite API v3.6, Swagger UI: [podiotsuite.com](https://podiotsuite.com)
+[^3]: (POD API v3.6 assets) — 37 个端点：SIM 列表/详情/诊断/位置/会话/SM-DS/事件/创建/转移/归还/订阅/退订/终止/更换/暂停/恢复/告警/刷新/短信/限制/标签/重分配IP/MSISDN交换/SID/Multi-IMSI(下载/禁用/删除/STK启用/禁用)/快捷拨号/MT呼叫/Download-Confirm/取消下载/同步重建
+[^4]: (POD API v3.6 esims) — 34 个端点：eSIM 列表/详情/同步eUICC/事件/创建/标签/转移/归还/订阅/退订/更换/暂停/恢复/告警/刷新/短信/限制/审计/下载Profile/启用Profile/禁用Profile/删除Profile/SGP.32专用(立即启用/Fallback/EIM增删改查/元数据/DP地址/状态/注册/注销/取消操作)

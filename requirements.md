@@ -313,48 +313,167 @@ Local_CMP 是一个面向企业客户的物联网连接管理平台。平台通�
 
 ---
 
-### REQ-14: API — 对接资源方（以 POD 为例）
+### REQ-14: API — 对接资源方（基于 POD API v3.6）
 
-**User Story:** AS CMP 开发者，I want 调用资源方 API 完成业务操作，so that 平台可以代理执行资产管理。
+**User Story:** AS CMP 开发者，I want 调用资源方 API 完成业务操作，so that 平台可以代理执行资产和 eSIM 的完整生命周期管理。
 
-#### Acceptance Criteria
+#### REQ-14-1: Token 获取与鉴权
 
-#### REQ-14-1: Token 获取
+| 接口 | 方法 | 路径 | 说明 |
+|------|------|------|------|
+| 登录获取 Token | POST | `/auth/token` | 使用 username 和 password 获取 token |
+| 刷新 Token | POST | `/auth/token/refresh` | 使用 refreshToken cookie 刷新 session token |
+| 密码重置 | POST | `/auth/recover-password` | 使用 username 或 email 发送密码重置邮件 |
+| 修改密码 | POST | `/auth/change-password` | 修改用户密码 |
 
-1. THE 系统 SHALL 调用资源方 `/auth/token` 接口，使用预置的 username 和 password 获取 token。
+1. THE 系统 SHALL 调用 `/auth/token` 使用预置的 username 和 password 获取 token。
 2. THE 系统 SHALL 将返回的 token 值作为后续接口 `Authorization` header 的值。
 3. THE 系统 SHALL 将返回的 `permissions.accountId` 作为后续接口的 `accountId` 参数。
 4. THE 系统 SHALL 在 token 有效期内（25 分钟）复用 token。
 5. IF token 过期返回 401，THE 系统 SHALL 自动重新获取 token 后重试。
+6. THE 系统 SHALL 支持通过 `/auth/token/refresh` 接口在 token 过期前主动刷新。
 
-#### REQ-14-2: 套餐列表
+#### REQ-14-2: SIM 资产管理（POD /assets 模块，37 个端点）
+
+**SIM 列表与查询（7 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 资产列表 | GET | `/assets` | 资产列表查询，支持按 iccid/imsi/msisdn/name/status/type 等 25+ 查询参数筛选 |
+| 资产详情 | GET | `/assets/{iccid}` | 获取单个资产完整信息 |
+| 资产诊断 | GET | `/assets/{iccid}/diagnostic` | 网络状态检查、最后连接、数据传输状态 |
+| 位置查询 | GET | `/assets/{iccid}/location` | 获取资产当前位置 |
+| 会话记录 | GET | `/assets/{iccid}/sessions` | 获取资产历史会话 |
+| SM-DS 服务器 | GET | `/assets/{iccid}/sm-ds-servers` | 获取 SM-DS 服务器列表（Consumer eSIM Profile 专用） |
+| SGP.22 事件日志 | GET | `/assets/{iccid}/esim-events` | 获取 SGP.22 事件日志（Consumer eSIM Profile 专用） |
+
+**SIM 生命周期管理（6 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 创建资产 | POST | `/assets` | 创建新资产（须提供 accountId、iccid、carriers） |
+| 更新分组名称 | PUT | `/assets/{iccid}/groupname` | 更新资产分组名称 |
+| 设置 dpProfileType | PUT | `/assets/{iccid}/dpprofiletype` | 设置 dpProfileType 分类标记 |
+| 删除外部资产 | DELETE | `/assets/{iccid}/external` | 删除外部 SGP.32 eSIM Profile |
+| 转移资产 | POST | `/assets/{iccid}/transfer` | 转移资产到其他账户 |
+| 归还资产 | POST | `/assets/{iccid}/return` | 归还资产到上级账户 |
+
+**套餐操作（6 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 激活并订阅 | PUT | `/assets/{iccid}/subscribe` | 激活资产并订阅套餐（需 productId） |
+| 退订 | PUT | `/assets/{iccid}/unsubscribe` | 退订套餐 |
+| 终止 | PUT | `/assets/{iccid}/terminate` | 立即终止套餐（与 unsubscribe 不同，terminate 立即生效） |
+| 更换套餐 | PUT | `/assets/{iccid}/resubscribe` | 移除旧订阅并创建新订阅 |
+| 暂停 | PUT | `/assets/{iccid}/suspend` | 暂停资产网络服务 |
+| 恢复 | PUT | `/assets/{iccid}/unsuspend` | 恢复已暂停资产 |
+
+**SIM 运维管理（6 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 设置告警 | PUT | `/assets/{iccid}/alerts` | 设置用量告警（data alerts + sms alerts） |
+| 网络刷新 | POST | `/assets/{iccid}/purge` | 强制更新位置，重置网络连接 |
+| 发送短信 | POST | `/assets/{iccid}/sms` | 向 SIM 发送短信（最多 160 字符） |
+| 设置用量限制 | POST | `/assets/{iccid}/limit` | 设置 data/datalimit 或 smslimit |
+| 设置标签 | POST | `/assets/{iccid}/tags` | 设置带索引的自定义标签 |
+| 重新分配 IP | POST | `/assets/{iccid}/reallocate-ip` | 重新分配固定 IP（支持单资产和批量） |
+
+**SIM 高级操作（7 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| MSISDN 交换 | POST | `/assets/{iccid}/swapMSISDN` | 将虚拟 MSISDN 迁至另一 SIM |
+| 修改 SID | POST | `/assets/{iccid}/sid` | 修改服务标识 |
+| 下载 IMSI | POST | `/assets/{iccid}/download-imsi` | 下载新 IMSI 到 SIM（切换运营商） |
+| 禁用 IMSI | POST | `/assets/{iccid}/disable-imsi` | 禁用 SIM 上的辅助 IMSI |
+| 删除 IMSI | POST | `/assets/{iccid}/delete-imsi` | 从 SIM 上删除 IMSI |
+| 启用 STK 菜单 | POST | `/assets/{iccid}/enable-stk-menu` | 启用 Multi-IMSI STK 菜单 |
+| 禁用 STK 菜单 | POST | `/assets/{iccid}/disable-stk-menu` | 禁用 Multi-IMSI STK 菜单 |
+
+**通话与 Consumer eSIM Profile 操作（5 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 快捷拨号 | POST | `/assets/{iccid}/quick-dial` | 添加快捷拨号条目 |
+| MT 语音呼叫 | POST | `/assets/{iccid}/dial` | 发起 MT 语音呼叫（P2P 唤醒） |
+| Download & Confirm | POST | `/assets/{iccid}/download-confirm` | 启动 Consumer eSIM Profile 下载并确认 |
+| 取消下载 | POST | `/assets/{iccid}/cancel-relaxed` | 取消待处理下载订单（宽松模式） |
+| 同步重建 | POST | `/assets/{iccid}/rebuild` | 从 Provider 同步并重建 Consumer eSIM Profile |
+
+#### REQ-14-3: eSIM 资产管理（POD /esims 模块，34 个端点）
+
+**eSIM 列表与查询（4 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| eSIM 列表 | GET | `/esims` | eSIM 列表查询，支持按 eid/name/groupName/accountId/profileIccid 等 30+ 查询参数筛选 |
+| eSIM 详情 | GET | `/esims/{eid}` | 获取 eSIM 完整信息（含 Profile 列表、启用 Profile、标签） |
+| 同步 eUICC 信息 | GET | `/esims/{eid}/euiccsync-euicc-info` | 从 eIM 同步 eUICC 元数据和 Profile 信息（SGP.32） |
+| 事件列表 | GET | `/esims/{eid}/events` | eSIM 事件列表（SGP.32，支持 JSON/CSV 导出） |
+
+**eSIM 生命周期管理（4 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 创建 eSIM | POST | `/esims` | 创建 eSIM（须提供 accountId、eid、profiles 数组） |
+| 设置标签 | POST | `/esims/{eid}/tags` | 设置 eSIM 自定义标签 |
+| 转移 eSIM | POST | `/esims/{eid}/transfer` | 转移 eSIM 到其他账户 |
+| 归还 eSIM | POST | `/esims/{eid}/return` | 归还 eSIM 到上级账户 |
+
+**启用 Profile 套餐操作（5 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 订阅套餐 | PUT | `/esims/{eid}/subscribe` | 激活启用 Profile 并订阅套餐 |
+| 退订套餐 | PUT | `/esims/{eid}/unsubscribe` | 启用 Profile 退订 |
+| 更换套餐 | PUT | `/esims/{eid}/resubscribe` | 启用 Profile 更换订阅套餐 |
+| 暂停 | PUT | `/esims/{eid}/suspend` | 暂停启用 Profile |
+| 恢复 | PUT | `/esims/{eid}/unsuspend` | 恢复暂停的启用 Profile |
+
+**eSIM 运维管理（5 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 设置告警 | PUT | `/esims/{eid}/alerts` | 设置启用 Profile 用量告警 |
+| 网络刷新 | POST | `/esims/{eid}/purge` | 启用 Profile 网络刷新 |
+| 发送短信 | POST | `/esims/{eid}/sms` | 向启用 Profile 发送短信 |
+| 设置限制 | POST | `/esims/{eid}/limit` | 设置启用 Profile 用量限制 |
+| eSIM 审计 | POST | `/esims/{eid}/audit` | 审计 eSIM 及所有已下载 Profile |
+
+**eSIM Profile 操作（SGP.02 M2M + SGP.22 Consumer，4 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 下载 Profile | POST | `/esims/{eid}/download-profile` | 下载并安装 Profile 到 eSIM（SGP.02 ES2+ / SGP.22 ES9+） |
+| 启用 Profile | POST | `/esims/{eid}/enable-profile` | 启用已安装的 Profile（Disabled → Enabled） |
+| 禁用 Profile | POST | `/esims/{eid}/disable-profile` | 禁用已安装的 Profile（Enabled → Disabled） |
+| 删除 Profile | POST | `/esims/{eid}/delete-profile` | 删除 eSIM 上已安装的 Profile |
+
+**SGP.32 IoT eSIM 专用（12 个端点）：**
+
+| 接口 | 方法 | POD 路径 | 说明 |
+|------|------|----------|------|
+| 设置立即启用标志 | POST | `/esims/{eid}/immediate-enable-flag` | 设置 IoT eSIM 立即启用标志 |
+| Fallback 管理 | POST | `/esims/{eid}/fallback-mgmt` | 管理 fallback profile 属性 |
+| 添加 EIM | POST | `/esims/{eid}/ecoadd` | 注册 EIM 到 IoT eSIM |
+| 更新 EIM | POST | `/esims/{eid}/ecoupdate` | 更新 IoT eSIM 的 EIM 配置 |
+| 删除 EIM | POST | `/esims/{eid}/ecodelete` | 从 IoT eSIM 删除 EIM |
+| 列出 EIM | POST | `/esims/{eid}/ecolist` | 列出已注册的所有 EIM |
+| 更新 eUICC 元数据 | POST | `/esims/{eid}/euiccupdate-metadata` | 更新 eUICC 元数据 |
+| 设置默认 DP 地址 | POST | `/esims/{eid}/euiccset-default-dp-address` | 设置 eUICC 默认 DP 地址 |
+| 更新 eUICC 状态 | POST | `/esims/{eid}/euiccupdate-status` | 更新 eUICC 激活状态 |
+| 注册 eUICC | POST | `/esims/{eid}/euiccregister` | 注册 eUICC 到 eIM |
+| 注销 eUICC | POST | `/esims/{eid}/euiccunregister` | 从 eIM 注销 eUICC |
+| 取消待处理操作 | POST | `/esims/{eid}/operationcancel` | 按 transactionId 取消待处理操作 |
+
+#### REQ-14-4: 套餐列表
 
 1. THE 系统 SHALL 调用资源方 `/products` 接口（GET 方法）获取套餐列表。
 2. THE 系统 SHALL 取返回结果中的 `resellerProductId` 作为套餐 ID。
 
-#### REQ-14-3: 套餐订阅（激活）
-
-1. THE 系统 SHALL 调用资源方 `/assets/{iccid}/subscribe` 接口订阅套餐。
-2. THE 系统 SHALL 在请求中传递以下参数：`subscriberAccountId`、`productId`、`carrier`、`poolId`。
-
-#### REQ-14-4: 暂停使用
-
-1. THE 系统 SHALL 调用资源方 `/assets/{iccid}/suspend` 接口暂停资产网络服务。
-
-#### REQ-14-5: 恢复使用
-
-1. THE 系统 SHALL 调用资源方 `/assets/{iccid}/unsuspend` 接口恢复已暂停的资产。
-
-#### REQ-14-6: 停止订阅
-
-1. THE 系统 SHALL 调用资源方 `/assets/{iccid}/unsubscribe` 接口退订套餐。
-
-#### REQ-14-7: 更换套餐
-
-1. THE 系统 SHALL 调用资源方 `/assets/{iccid}/resubscribe` 接口更换订阅套餐。
-2. THE 系统 SHALL 在请求中传递 `subscriberAccountId`、`productId`、`startTime` 参数。
-
-#### REQ-14-8: 获取话单
+#### REQ-14-5: 话单接口
 
 1. THE 系统 SHALL 调用资源方 `/cdr` 接口获取话单数据。
 2. THE 系统 SHALL 使用返回结果中的 `roundedBytes` 字段作为流量累计值。
@@ -451,3 +570,4 @@ Local_CMP 是一个面向企业客户的物联网连接管理平台。平台通�
 | V2.0.0 | 2026-06-23 | AI Coding Agent | 基于 V1.0.2 原始文档完整重设计，采用 EARS 规范，新增 REQ-18~21 非功能需求详情 |
 | V2.0.1 | 2026-06-23 | AI Coding Agent | 补全权限矩阵定义（权限组列表 + 页面操作映射） |
 | V2.1.0 | 2026-07-13 | AI Coding Agent | 基于原始 V1.0.2 第三章重新设计账户/用户/权限模块：新增账户类型层级体系（root/reseller/customer）、reseller 三层级联链路、权限命名对齐原始 ADMIN_ 前缀、新增 read_only 角色、完善权限矩阵 |
+| V2.2.0 | 2026-07-13 | AI Coding Agent | 基于 POD API.txt (API v3.6) 重新设计 REQ-14 对接资源方接口：补齐 assets 模块 37 个端点（含 SIM 全生命周期 + Multi-IMSI + Consumer eSIM Profile）和 esims 模块 34 个端点（含 eSIM 全生命周期 + Profile 操作 + SGP.32 IoT 专用） |
