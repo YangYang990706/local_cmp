@@ -1291,30 +1291,30 @@ Profile 在导入到平台后即被视为一种特殊的 SIM 资产，其特点�
               | installed|            |  failed  | (重试或回退至 onstock)
               +----+-----+            +----------+
                    |
-              enable-profile
-                   |
-                   v
-              +----------+
-              | enabled  |
-              +----+-----+
-                   |
               disable-profile
                    |
                    v
               +----------+
-              | disabled |
-              +----+-----+
-                   |
-              delete-profile
-                   |
-         +---------+---------+
-         |                   |
-repeat_download=true  repeat_download=false
-         |                   |
-         v                   v
-   +----------+        +-----------+
-   | onstock  |        | terminated| (终端状态，不可复用)
-   +----------+        +-----------+
+              | disabled |<---------+
+              +----+-----+          |
+                   |                 |
+              enable-profile   disable-profile
+                   |                 |
+                   v                 |
+              +----------+     +----+-----+
+              | enabled  |---->| disabled |
+              +----------+     +----------+
+                                    |
+                               delete-profile
+                                    |
+                           +--------+--------+
+                           |                 |
+                  repeat_download=true  repeat_download=false
+                           |                 |
+                           v                 v
+                     +----------+      +-----------+
+                     | onstock  |      | terminated| (终端状态，不可复用)
+                     +----------+      +-----------+
 ```
 
 **状态定义与转移规则：**
@@ -1323,7 +1323,8 @@ repeat_download=true  repeat_download=false
 |----------|----------|----------|----------|
 | onstock | download-profile | installed | Profile 已导入且 ac_code 有效；onstock 不绑定 EID，可被任意目标 eSIM 选中下载 |
 | onstock | download-profile | failed | SM-DP+ 下载失败；可重试或保持 onstock |
-| installed | enable-profile | enabled | Profile 已安装于目标 eSIM；M2M 须为 installed 状态；IoT 接受任意已安装状态 |
+| installed | disable-profile | disabled | 下载完成后可直接禁用（保持未启用状态） |
+| disabled | enable-profile | enabled | 已禁用状态下可重新启用 |
 | enabled | disable-profile | disabled | 仅 M2M：自动禁用当前启用的 Profile，无需传 ICCID |
 | enabled | disable-profile | disabled | 仅 IoT：必须指定 ICCID |
 | disabled | delete-profile | onstock | repeat_download=true；Profile 非 Bootstrap；删除后清除 eid 关联，回到可下载状态 |
@@ -1434,7 +1435,7 @@ sequenceDiagram
 
 **API:** `POST /api/assets/esim/{eid}/enable-profile`  
 **权限:** ADMIN_eSIM  
-**前置条件:** Profile 处于 `installed` 状态（下载完成但未启用）
+**前置条件:** Profile 处于 `installed` 或 `disabled` 状态
 
 ```json
 POST /api/assets/esim/EID-EXAMPLE-001/enable-profile
@@ -1454,7 +1455,7 @@ POST /api/assets/esim/EID-EXAMPLE-001/enable-profile
 | rollback | NO | IoT 失败回滚标志 |
 
 **后端处理（M2M）：**
-1. 校验 Profile `profile_state == installed`
+1. 校验 Profile `profile_state == installed` 或 `profile_state == disabled`
 2. 校验 eSIM 上当前启用的 Profile（如有）将被自动禁用
 3. 通过 ES2+ 发起启用请求
 4. `profile_state = enabled`
@@ -1469,7 +1470,7 @@ POST /api/assets/esim/EID-EXAMPLE-001/enable-profile
 
 **API:** `POST /api/assets/esim/{eid}/disable-profile`  
 **权限:** ADMIN_eSIM  
-**前置条件:** Profile 必须处于 `enabled` 状态
+**前置条件:** Profile 处于 `installed` 或 `enabled` 状态
 
 ```json
 POST /api/assets/esim/EID-EXAMPLE-001/disable-profile
@@ -1481,15 +1482,16 @@ POST /api/assets/esim/EID-EXAMPLE-001/disable-profile
 M2M 模式不需要传 ICCID（自动禁用当前启用的 Profile），IoT 模式需传 ICCID。
 
 **后端处理（M2M）：**
-1. 获取 eSIM 当前启用的 Profile
-2. 校验该 Profile `profile_state == enabled`
-3. 通过 ES2+ 发起禁用请求
-4. `profile_state = disabled`
-5. 自动启用 Bootstrap Profile（保障基本连接）
-6. 清空 eSIM 的 `enabled_profile`
+1. 若 `profile_state == installed`：直接设置 `profile_state = disabled`
+2. 若 `profile_state == enabled`：
+   - 获取 eSIM 当前启用的 Profile
+   - 通过 ES2+ 发起禁用请求
+   - `profile_state = disabled`
+   - 自动启用 Bootstrap Profile（保障基本连接）
+   - 清空 eSIM 的 `enabled_profile`
 
 **后端处理（IoT SGP.32）：**
-1. 校验指定 ICCID 的 Profile `profile_state == enabled`
+1. 校验指定 ICCID 的 Profile `profile_state == enabled` 或 `profile_state == installed`
 2. 通过 ES10b IPA 发起禁用
 3. `profile_state = disabled`
 4. 若禁用的是最后一个 enabled profile 且 eSIM 有 bootstrap/fallback profile，自动启用
@@ -1552,9 +1554,9 @@ POST /api/assets/esim/EID-EXAMPLE-001/delete-profile
 ```
 阶段        profile_state    download   enable   disable   delete   subscribe
 导入后      onstock            ✓          ✗        ✗         ✗        ✗
-已安装      installed          ✗          ✓        ✗         ✗        ✗
+已安装      installed          ✗          ✓        ✓         ✗        ✗
 已启用      enabled            ✗          ✗        ✓         ✓*       ✓
-已禁用      disabled           ✗          ✗        ✗         ✓        ✗
+已禁用      disabled           ✗          ✓        ✗         ✓        ✗
 下载失败    failed             ✓(重试)    ✗        ✗         ✗        ✗
 已终止      terminated         ✗          ✗        ✗         ✗        ✗
 delete 恢复  onstock            ✓          ✗        ✗         ✗        ✗
