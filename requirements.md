@@ -574,3 +574,4 @@ Local_CMP 是一个面向企业客户的物联网连接管理平台。平台通�
 | V2.2.1 | 2026-07-13 | AI Coding Agent | 新增 Profile 导入至删除完整生命周期设计（design.md）：定义 Profile 资产模型（含 ac_code 字段）、状态机（onstock→downloading→disabled→enabled→删除）、各阶段 API 流程与前置条件 |
 | V2.2.2 | 2026-07-13 | AI Coding Agent | 基于 POD API.txt AssetSimcard/eSIM schema 重建 Data Models：Asset 表对齐 POD 42 个字段（status/profileState/carriers/lastCall/lastSMS/securityServices）；新增 eSIM/AssetProfile/AssetSetup/AssetAlert/Subscription/SubscriptionBundle 表；Account 表补齐地址/税务/时区/语言等字段 |
 | V2.2.3 | 2026-07-13 | AI Coding Agent | 更新 Profile 状态机：delete-profile 完成后根据 repeat_download 参数恢复至 onstock（可重复下载）或进入 terminated（终端不可复用）；Asset 模型新增 repeat_download 字段 |
+| V2.2.4 | 2026-07-13 | AI Coding Agent | 重构 Profile 状态机：移除 downloading 中间态，onstock→installed→enabled→disabled→onstock/terminated 线性流程；onstock 不绑定 EID 可被任意 eSIM 选中下载；download-profile 不再支持 enable=true 立即启用的快捷操作 |

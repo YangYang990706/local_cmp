@@ -1277,53 +1277,55 @@ Profile 在导入到平台后即被视为一种特殊的 SIM 资产，其特点�
 ```
                            +----------+
                            | onstock  |  <-- 导入后初始状态 / delete 后可恢复
-                           +----+-----+
+                           +----+-----+    (不绑定 EID，可被任意下载操作选中)
                                 |
                       download-profile
                       (使用 ac_code)
                                 |
-                                v
-                         +------+------+
-                         | downloading |
-                         +-------------+
-                          |           |
-                     success       failure
-                          |           |
-                          v           v
-                   +----------+   +----------+
-   enable=true --> | enabled  |   |  failed  | (重试或回退至 onstock)
-                   +----+-----+   +----------+
-                        |
-                   disable-profile
-                        |
-                        v
-                   +----------+
-                   | disabled |
-                   +----+-----+
-                        |
-                   delete-profile
-                        |
-              +---------+---------+
-              |                   |
-   repeat_download=true    repeat_download=false
-              |                   |
-              v                   v
-        +----------+        +-----------+
-        | onstock  |        | terminated| (终端状态，不可复用)
-        +----------+        +-----------+
+                    +-----------+-----------+
+                    |                       |
+                 成功                      失败
+                    |                       |
+                    v                       v
+              +----------+            +----------+
+              | installed|            |  failed  | (重试或回退至 onstock)
+              +----+-----+            +----------+
+                   |
+              enable-profile
+                   |
+                   v
+              +----------+
+              | enabled  |
+              +----+-----+
+                   |
+              disable-profile
+                   |
+                   v
+              +----------+
+              | disabled |
+              +----+-----+
+                   |
+              delete-profile
+                   |
+         +---------+---------+
+         |                   |
+repeat_download=true  repeat_download=false
+         |                   |
+         v                   v
+   +----------+        +-----------+
+   | onstock  |        | terminated| (终端状态，不可复用)
+   +----------+        +-----------+
 ```
 
 **状态定义与转移规则：**
 
 | 当前状态 | 允许操作 | 目标状态 | 前置条件 |
 |----------|----------|----------|----------|
-| onstock | download-profile | downloading | Profile 已导入且 ac_code 有效；必须已绑定目标 eSIM（有 EID） |
-| downloading | (异步完成) | enabled | download-profile 请求中 `enable: true`；SM-DP+ 返回成功 |
-| downloading | (异步完成) | disabled | download-profile 请求中 `enable: false`（或未传）；SM-DP+ 返回成功 |
-| downloading | (异步完成) | failed | SM-DP+ 返回失败；可重试或手动回退至 onstock |
+| onstock | download-profile | installed | Profile 已导入且 ac_code 有效；onstock 不绑定 EID，可被任意目标 eSIM 选中下载 |
+| onstock | download-profile | failed | SM-DP+ 下载失败；可重试或保持 onstock |
+| installed | enable-profile | enabled | Profile 已安装于目标 eSIM；M2M 须为 installed 状态；IoT 接受任意已安装状态 |
 | enabled | disable-profile | disabled | 仅 M2M：自动禁用当前启用的 Profile，无需传 ICCID |
 | enabled | disable-profile | disabled | 仅 IoT：必须指定 ICCID |
-| disabled | enable-profile | enabled | Profile 已安装在 eSIM 上（非 onstock）；M2M 须为 disabled 状态；IoT 接受任意已安装状态 |
 | disabled | delete-profile | onstock | repeat_download=true；Profile 非 Bootstrap；删除后清除 eid 关联，回到可下载状态 |
 | disabled | delete-profile | terminated | repeat_download=false；Profile 非 Bootstrap；删除后进入终端，不可再下载 |
 | enabled | delete-profile | onstock | repeat_download=true；M2M 先自动 disable 再删除；Bootstrap 不可删除 |
@@ -1358,7 +1360,7 @@ POST /api/assets/sim
 
 **API:** `POST /api/assets/esim/{eid}/download-profile`  
 **权限:** ADMIN_eSIM  
-**前置条件:** Profile 处于 `onstock` 状态，且与目标 eSIM 属同一账户
+**前置条件:** Profile 处于 `onstock` 状态（不需预先绑定 EID），且与目标 eSIM 属同一账户
 
 **请求示例（M2M）：**
 
@@ -1367,7 +1369,6 @@ POST /api/assets/esim/EID-EXAMPLE-001/download-profile
 {
   "accountId": "acc-456",
   "iccid": "8988247000000000001",
-  "enable": false,
   "callbackUrl": "https://cmp.example.com/api/callback/download"
 }
 ```
@@ -1380,7 +1381,6 @@ POST /api/assets/esim/EID-EXAMPLE-001/download-profile
   "accountId": "acc-456",
   "iccid": "8988247000000000001",
   "type": 0,
-  "enable": true,
   "callbackUrl": "https://cmp.example.com/api/callback/download"
 }
 ```
@@ -1389,7 +1389,6 @@ POST /api/assets/esim/EID-EXAMPLE-001/download-profile
 |------|------|------|
 | accountId | YES | 账户 ID，须与 Profile 和 eSIM 的归属账户一致 |
 | iccid | M2M 必填 / IoT type=0 必填 | 要下载的 Profile ICCID |
-| enable | NO | 下载完成后是否立即启用（默认 false），仅 M2M 支持 |
 | type | IoT 必填 | 下载方式：0=ICCID, 1=CONTACT_DEFAULT_SMDP, 2=CONTACT_DEFAULT_SMDS, 3=CONTACT_SMDS, 4=PROFILE_TYPE |
 | data | 条件必填 | type=3 时的 SM-DS 地址，格式 `https://smds.example.com` |
 | profileType | 条件必填 | type=4 时的 Profile 类型（如 `consumer`, `iot`, `automotive`） |
@@ -1397,23 +1396,23 @@ POST /api/assets/esim/EID-EXAMPLE-001/download-profile
 | callbackUrl | NO | 异步操作完成通知 URL |
 
 **后端处理（同步模式 — Traditional eSIM）：**
-1. 校验 `accountId` 对 eSIM 和 Profile 有操作权限
-2. 查询 Profile：校验 `profile_state == onstock`
+1. 校验 `accountId` 对目标 eSIM 和 Profile 有操作权限
+2. 查询 Profile：校验 `profile_state == onstock`（onstock 不绑定 EID，目标 EID 由 API 路径参数指定）
 3. 校验 Profile 的 `ac_code` 有效
 4. 发起 SM-DP+ 下载请求（传入 ac_code 中编码的 SM-DP+ 地址和 matching ID）
-5. 更新 `profile_state = downloading`
-6. SM-DP+ 返回成功后：
-   - 若 `enable == true` 则 `profile_state = enabled`
-   - 否则 `profile_state = disabled`
+5. SM-DP+ 返回成功后：
+   - `profile_state = installed`
    - 设置 `eid` 为目标 eSIM 的 EID
-7. 若 SM-DP+ 返回失败：`profile_state = failed`，返回错误信息
+   - 创建 `AssetProfile` 关联记录
+6. 若 SM-DP+ 返回失败：`profile_state = failed`，返回错误信息
 
 **后端处理（异步模式 — SMS-less eSIM）：**
 1. 校验权限和前置状态（同上）
-2. `profile_state = downloading`
-3. 立即返回 202 Accepted
-4. 异步执行 SM-DP+ 下载
-5. 完成后通过 callbackUrl 通知结果，更新 profile_state
+2. 立即返回 202 Accepted
+3. 异步执行 SM-DP+ 下载
+4. 完成后通过 callbackUrl 通知结果：
+   - 成功：`profile_state = installed`
+   - 失败：`profile_state = failed`
 
 ```mermaid
 sequenceDiagram
@@ -1421,26 +1420,21 @@ sequenceDiagram
     participant CMP as CMP 平台
     participant SMDP as SM-DP+
 
-    Admin->>CMP: POST download-profile (eid, iccid, enable)
+    Admin->>CMP: POST download-profile (eid, iccid)
     activate CMP
     CMP->>CMP: 校验权限、profile_state=onstock、ac_code 有效
-    CMP->>CMP: profile_state = downloading
     CMP->>SMDP: ES2+ DownloadProfile(ac_code)
     SMDP-->>CMP: Profile Package
-    alt enable=true
-        CMP->>CMP: profile_state = enabled
-    else enable=false
-        CMP->>CMP: profile_state = disabled
-    end
+    CMP->>CMP: profile_state = installed、设置 eid
     deactivate CMP
-    CMP-->>Admin: 返回结果 + 新状态
+    CMP-->>Admin: 返回 installed 状态
 ```
 
 #### 流程三：启用 Profile（enable-profile）
 
 **API:** `POST /api/assets/esim/{eid}/enable-profile`  
 **权限:** ADMIN_eSIM  
-**前置条件:** Profile 处于 `disabled` 状态（M2M）或已安装（IoT）
+**前置条件:** Profile 处于 `installed` 状态（下载完成但未启用）
 
 ```json
 POST /api/assets/esim/EID-EXAMPLE-001/enable-profile
@@ -1460,7 +1454,7 @@ POST /api/assets/esim/EID-EXAMPLE-001/enable-profile
 | rollback | NO | IoT 失败回滚标志 |
 
 **后端处理（M2M）：**
-1. 校验 Profile `profile_state == disabled`
+1. 校验 Profile `profile_state == installed`
 2. 校验 eSIM 上当前启用的 Profile（如有）将被自动禁用
 3. 通过 ES2+ 发起启用请求
 4. `profile_state = enabled`
@@ -1558,15 +1552,16 @@ POST /api/assets/esim/EID-EXAMPLE-001/delete-profile
 ```
 阶段        profile_state    download   enable   disable   delete   subscribe
 导入后      onstock            ✓          ✗        ✗         ✗        ✗
-下载中      downloading        ✗          ✗        ✗         ✗        ✗
-已安装      disabled           ✗          ✓        ✗         ✓        ✗
+已安装      installed          ✗          ✓        ✗         ✗        ✗
 已启用      enabled            ✗          ✗        ✓         ✓*       ✓
+已禁用      disabled           ✗          ✗        ✗         ✓        ✗
 下载失败    failed             ✓(重试)    ✗        ✗         ✗        ✗
 已终止      terminated         ✗          ✗        ✗         ✗        ✗
 delete 恢复  onstock            ✓          ✗        ✗         ✗        ✗
 ```
 
 > *enabled 状态下 delete，M2M 自动先 disable 再删除；IoT 直接删除。
+> onstock 不绑定 EID，可被任意目标 eSIM 选中下载。
 > delete 后根据 `repeat_download` 参数：`true` → 回退至 onstock（可重新 download）；`false` → 进入 terminated（终端，不可复用）。
 
 #### 套餐
