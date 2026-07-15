@@ -637,13 +637,14 @@ erDiagram
         string asset_name "name"
         enum asset_type "SIM|eSIM_Profile_M2M|eSIM_Profile_Consumer|eSIM_Profile_IoT"
         enum status "active|inactive|suspended|preactive|deleted|terminated|unknown"
-        enum profile_state "''|onstock|disabled|enabled|created|deleted|available|locked|allocated|linked|confirmed|released|downloaded|installed|error"
+        enum profile_state "''|onstock|disabled|enabled|created|deleted|available|locked|allocated|linked|confirmed|released|downloaded|installed|error|terminated"
         enum profile_type "''|bootstrap|operational|preinstalled|virtual"
         enum target_state "disabled|enabled 可空"
         string target_eid
         string bootstrap_eid
         string ac_code "GSMA激活码 Profile专用"
         string eid "关联eSIM设备EID"
+        bool repeat_download "delete后是否可重复下载 默认true"
         string model "设备型号"
         string imei
         string msisdn "主号码"
@@ -793,7 +794,7 @@ erDiagram
 | asset_name | (setups[].assetName) | varchar(255) | NO | YES | YES | 资产名称 |
 | asset_type | type | enum | YES | `SIM` | `eSIM_Profile_M2M` / `eSIM_Profile_Consumer` / `eSIM_Profile_IoT` | 资产类型 |
 | status | status | enum | YES | YES | YES | active / inactive / suspended / preactive / deleted / terminated / unknown |
-| profile_state | profileState | enum | NO | NULL | YES | '' / onstock / disabled / enabled / created / deleted / available / locked / allocated / linked / confirmed / released / downloaded / installed / error |
+| profile_state | profileState | enum | NO | NULL | YES | '' / onstock / disabled / enabled / created / deleted / available / locked / allocated / linked / confirmed / released / downloaded / installed / error / terminated |
 | profile_type | profileType | enum | NO | NULL | YES | '' / bootstrap / operational / preinstalled / virtual |
 | target_state | targetState | enum | NO | NULL | YES | disabled / enabled（可空；download-profile 可选立即 enable） |
 | target_eid | targetEid | varchar(30) | NO | NULL | YES | 异步操作目标 EID |
@@ -807,6 +808,7 @@ erDiagram
 | ownership | ownership[] | json | NO | YES | YES | 归属链 [accountId, ...] |
 | fallback_attribute | fallbackAttribute | boolean | NO | NULL | YES | IoT Profile fallback 标志（默认 false） |
 | reserved | reserved | varchar(30) | NO | NULL | YES | 预留给哪个 EID |
+| repeat_download | (CMP 扩展) | boolean | NO | NULL | YES | delete-profile 后是否可重复下载（默认 true） |
 | batch_id | batchId | varchar(64) | NO | YES | YES | 批次 ID |
 | batch_name | batchName | varchar(128) | NO | YES | YES | 批次名称 |
 | external | external | boolean | NO | YES | YES | 是否外部资产 |
@@ -1273,36 +1275,42 @@ Profile 在导入到平台后即被视为一种特殊的 SIM 资产，其特点�
 #### Profile 状态机
 
 ```
-                          +----------+
-                          | onstock  |  <-- 导入后初始状态
-                          +----+-----+
-                               |
-                     download-profile
-                     (使用 ac_code)
-                               |
-                               v
-                        +------+------+
-                        | downloading |
-                        +-------------+
-                         |           |
-                    success       failure
-                         |           |
-                         v           v
-                  +----------+   +----------+
-  enable=true --> | enabled  |   |  failed  | (重试或回退至 onstock)
-                  +----+-----+   +----------+
-                       |
-                  disable-profile
-                       |
-                       v
-                  +----------+
-                  | disabled |
-                  +----+-----+
-                       |
-                  delete-profile
-                       |
-                       v
-                  (已删除，不可恢复)
+                           +----------+
+                           | onstock  |  <-- 导入后初始状态 / delete 后可恢复
+                           +----+-----+
+                                |
+                      download-profile
+                      (使用 ac_code)
+                                |
+                                v
+                         +------+------+
+                         | downloading |
+                         +-------------+
+                          |           |
+                     success       failure
+                          |           |
+                          v           v
+                   +----------+   +----------+
+   enable=true --> | enabled  |   |  failed  | (重试或回退至 onstock)
+                   +----+-----+   +----------+
+                        |
+                   disable-profile
+                        |
+                        v
+                   +----------+
+                   | disabled |
+                   +----+-----+
+                        |
+                   delete-profile
+                        |
+              +---------+---------+
+              |                   |
+   repeat_download=true    repeat_download=false
+              |                   |
+              v                   v
+        +----------+        +-----------+
+        | onstock  |        | terminated| (终端状态，不可复用)
+        +----------+        +-----------+
 ```
 
 **状态定义与转移规则：**
@@ -1316,8 +1324,10 @@ Profile 在导入到平台后即被视为一种特殊的 SIM 资产，其特点�
 | enabled | disable-profile | disabled | 仅 M2M：自动禁用当前启用的 Profile，无需传 ICCID |
 | enabled | disable-profile | disabled | 仅 IoT：必须指定 ICCID |
 | disabled | enable-profile | enabled | Profile 已安装在 eSIM 上（非 onstock）；M2M 须为 disabled 状态；IoT 接受任意已安装状态 |
-| disabled | delete-profile | (删除) | Profile 非 Bootstrap Profile；M2M：已存在数据库中且属于该 eSIM |
-| enabled | delete-profile | (删除) | M2M：系统先自动 disable 再删除；Bootstrap Profile 不可删除 |
+| disabled | delete-profile | onstock | repeat_download=true；Profile 非 Bootstrap；删除后清除 eid 关联，回到可下载状态 |
+| disabled | delete-profile | terminated | repeat_download=false；Profile 非 Bootstrap；删除后进入终端，不可再下载 |
+| enabled | delete-profile | onstock | repeat_download=true；M2M 先自动 disable 再删除；Bootstrap 不可删除 |
+| enabled | delete-profile | terminated | repeat_download=false；M2M 先自动 disable 再删除；Bootstrap 不可删除 |
 
 #### 流程一：Profile 导入
 
@@ -1500,7 +1510,8 @@ M2M 模式不需要传 ICCID（自动禁用当前启用的 Profile），IoT 模�
 POST /api/assets/esim/EID-EXAMPLE-001/delete-profile
 {
   "accountId": "acc-456",
-  "iccid": "8988247000000000001"
+  "iccid": "8988247000000000001",
+  "repeat_download": true
 }
 ```
 
@@ -1510,7 +1521,8 @@ POST /api/assets/esim/EID-EXAMPLE-001/delete-profile
 POST /api/assets/esim/EID-EXAMPLE-001/delete-profile
 {
   "accountId": "acc-456",
-  "iccids": ["8988247000000000001", "8988247000000000002"]
+  "iccids": ["8988247000000000001", "8988247000000000002"],
+  "repeat_download": false
 }
 ```
 
@@ -1519,6 +1531,7 @@ POST /api/assets/esim/EID-EXAMPLE-001/delete-profile
 | accountId | YES | 账户 ID |
 | iccid | YES（单删） | 要删除的 Profile ICCID |
 | iccids | YES（批删） | ICCID 数组，若传入则忽略 iccid |
+| repeat_download | NO | 删除后是否允许重复下载（默认 true）。true → profile_state 回退至 onstock；false → 进入 terminated 终端状态 |
 | uuid | NO | 操作跟踪 ID |
 | callbackUrl | NO | 异步通知 URL |
 
@@ -1526,25 +1539,35 @@ POST /api/assets/esim/EID-EXAMPLE-001/delete-profile
 1. 校验目标 Profile 非 Bootstrap Profile
 2. 若 `profile_state == enabled`，先执行 disable 流程（自动使能 Bootstrap）
 3. 通过 ES2+ 发起删除请求
-4. Profile 资产标记为已删除或清除 eid 关联
+4. 删除成功后：
+   - 清除 `eid` 关联
+   - 清除 `AssetProfile` 映射记录
+   - 若 `repeat_download == true`（默认）：`profile_state = onstock`，Profile 资产保留，可重新发起 download-profile
+   - 若 `repeat_download == false`：`profile_state = terminated`，Profile 资产进入终端，不可再下载
 
 **后端处理（IoT SGP.32）：**
 1. 校验 Profile 存在于 eUICC 上
 2. 通过 ES10b IPA 发起删除
-3. Profile 资产标记为已删除
+3. 删除成功后：
+   - 清除 `eid` 关联
+   - 清除 `AssetProfile` 映射记录
+   - 根据 `repeat_download` 参数决定 `profile_state = onstock` 或 `terminated`
 
 #### 状态与操作可用性对照表
 
 ```
-阶段      profile_state    download   enable   disable   delete   subscribe
-导入后    onstock            ✓          ✗        ✗         ✗        ✗
-下载中    downloading        ✗          ✗        ✗         ✗        ✗
-已安装    disabled           ✗          ✓        ✗         ✓        ✗
-已启用    enabled            ✗          ✗        ✓         ✓*       ✓
-下载失败  failed             ✓(重试)    ✗        ✗         ✗        ✗
+阶段        profile_state    download   enable   disable   delete   subscribe
+导入后      onstock            ✓          ✗        ✗         ✗        ✗
+下载中      downloading        ✗          ✗        ✗         ✗        ✗
+已安装      disabled           ✗          ✓        ✗         ✓        ✗
+已启用      enabled            ✗          ✗        ✓         ✓*       ✓
+下载失败    failed             ✓(重试)    ✗        ✗         ✗        ✗
+已终止      terminated         ✗          ✗        ✗         ✗        ✗
+delete 恢复  onstock            ✓          ✗        ✗         ✗        ✗
 ```
 
 > *enabled 状态下 delete，M2M 自动先 disable 再删除；IoT 直接删除。
+> delete 后根据 `repeat_download` 参数：`true` → 回退至 onstock（可重新 download）；`false` → 进入 terminated（终端，不可复用）。
 
 #### 套餐
 
