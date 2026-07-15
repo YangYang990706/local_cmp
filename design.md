@@ -558,7 +558,9 @@ sequenceDiagram
 
 ---
 
-## Data Models
+## Data Models（基于 POD API v3.6 AssetSimcard / eSIM 模型重建）
+
+本章节基于 POD API.txt (v3.6) 中 `AssetSimcard` 和 `eSIM` 定义，重新设计 local_cmp 的 SIM、Profile、eSIM 三类资产模型。
 
 ### 核心实体关系
 
@@ -568,21 +570,35 @@ erDiagram
     Account ||--o{ Asset : "归属"
     Account ||--o{ Account : "reseller 管理子客户"
     User }o--o{ Role : "被授予"
-    Asset ||--o| Plan : "订阅"
-    Asset ||--o{ CDR : "产生"
+    Asset ||--o| Plan : "订阅 (subscriptions.bundles)"
+    Asset ||--o{ CDRAccumulated : "产生"
+    Asset ||--o| eSIM : "关联 (通过 eid)"
+    eSIM ||--o{ Asset : "包含 profiles"
     Plan }o--|| ResourceProvider : "归属"
-    CDR }o--|| ResourceProvider : "来源于"
+    CDRAccumulated }o--|| ResourceProvider : "来源于"
     Bill }o--|| Account : "归属"
     Bill }o--|| Asset : "关联"
     AuditLog }o--|| User : "操作人"
+    Asset ||--o{ AssetAlert : "setups.alerts"
+    Asset ||--o{ AssetSetup : "setups"
 
     Account {
         bigint id PK
-        string code UK "全局唯一编码，按类型前缀生成"
+        string code UK "全局唯一编码 ACC_ROOT/ACC_ENT_{type}"
         string name
         string account_type "root/reseller/customer"
-        tinyint level "账户层级 0=root 1/2=reseller 2/3=customer"
-        bigint parent_id FK "上级账户ID（reseller链路）"
+        tinyint level "0=root 1/2=reseller 2/3=customer"
+        bigint parent_id FK "上级账户"
+        varchar currency "CNY/USD/EUR 默认 CNY"
+        varchar tax_id "税务标识"
+        text billing_disclaimer "账单免责声明"
+        varchar contact_name "联系人姓名"
+        text address "详细地址"
+        varchar city "城市"
+        varchar state_region "省份/地区"
+        varchar postal_code "邮政编码"
+        varchar country "国家"
+        varchar phone "联系电话"
         tinyint status "0-启用 1-停用"
         datetime created_at
         datetime updated_at
@@ -593,8 +609,10 @@ erDiagram
         bigint account_id FK
         string username "账户内唯一"
         string password_hash
-        string email "密码重置、告警、通知"
-        string phone "可选"
+        string email
+        string phone
+        varchar timezone "Asia/Shanghai"
+        varchar locale "zh-CN/en-US"
         tinyint status "0-启用 1-停用"
         datetime last_login_at
         datetime created_at
@@ -603,7 +621,7 @@ erDiagram
 
     Role {
         bigint id PK
-        string code UK "如 ADMIN_SIM, read_SIM, read_only"
+        string code UK "ADMIN_SIM, read_SIM"
         string name
         string description
     }
@@ -614,25 +632,90 @@ erDiagram
     }
 
     Asset {
-        bigint id PK
-        bigint account_id FK
-        string iccid UK "SIM/Profile 标识"
-        string eid "eSIM 设备标识（可为空）"
-        string asset_name
-        string asset_type "SIM/eSIM/Profile"
-        string msisdn
+        string iccid PK "唯一标识 (POD 资产)"
+        bigint account_id FK "ownerAccountId"
+        string asset_name "name"
+        enum asset_type "SIM|eSIM_Profile_M2M|eSIM_Profile_Consumer|eSIM_Profile_IoT"
+        enum status "active|inactive|suspended|preactive|deleted|terminated|unknown"
+        enum profile_state "''|onstock|disabled|enabled|created|deleted|available|locked|allocated|linked|confirmed|released|downloaded|installed|error"
+        enum profile_type "''|bootstrap|operational|preinstalled|virtual"
+        enum target_state "disabled|enabled 可空"
+        string target_eid
+        string bootstrap_eid
+        string ac_code "GSMA激活码 Profile专用"
+        string eid "关联eSIM设备EID"
+        string model "设备型号"
         string imei
-        string project_name
-        string card_model "插拔卡/工规卡/车规卡"
-        string card_type "SGP.22/SGP.32"
-        string profile_type "bootprofile/virtual"
-        bigint plan_id FK "当前订阅套餐"
-        tinyint status "0-启用 1-停用 2-暂停"
-        string network_name "登录网络名称"
-        datetime activated_at
-        datetime last_sync_at
-        datetime last_network_at
-        datetime plan_bound_at
+        string msisdn "主号码"
+        json virtual_msisdn "[{provider, msisdn}]"
+        json ownership "[accountId, ...]"
+        bool fallback_attribute "IoT fallback标志"
+        string reserved "预留给哪个EID"
+        string batch_id "批次ID"
+        string batch_name "批次名称"
+        bool external "是否外部资产"
+        bigint limit "数据限制(字节)"
+        bigint sms_limit "短信限制(条)"
+        json fixed_ips "[{carrier, ip}]"
+        json carriers "运营商配置对象"
+        json last_call "最近通话记录"
+        json last_sms "最近短信记录"
+        json security_services "[{poolId, name, type, carrier, ranges}]"
+        datetime activation_date
+        datetime deactivation_date
+        datetime reactivation_date
+        datetime subscription_date
+        datetime suspension_date
+        datetime last_network_at "最后连接时间"
+        datetime created_at
+        datetime updated_at
+    }
+
+    eSIM {
+        string eid PK "eSIM唯一标识"
+        bigint account_id FK "ownerAccountId"
+        enum esim_type "M2M|Consumer|IoT"
+        json ownership "[accountId, ...]"
+        string asset_name "eSimName from setups"
+        string group_name "eSimGroupName from setups"
+        string enabled_profile_iccid "当前启用Profile的ICCID"
+        bool external
+        string batch_id
+        string batch_name
+        string eim_tenant_id "IoT SGP.32专用"
+        int callback_status "当前操作到期时间戳 0=无操作"
+        datetime created_at
+        datetime updated_at
+    }
+
+    AssetProfile {
+        bigint id PK
+        string eid FK "归属eSIM"
+        string iccid FK "关联Asset"
+        bool enabled "是否启用"
+        bool bootstrap "是否Bootstrap Profile"
+        enum status "active|inactive|suspended|preactive|unknown"
+        enum profile_state "onstock|disabled|enabled|created|deleted"
+        datetime created_at
+        datetime updated_at
+    }
+
+    AssetSetup {
+        bigint id PK
+        string iccid FK "归属Asset"
+        string account_id
+        string asset_name "setups中的assetName"
+        datetime created_at
+        datetime updated_at
+    }
+
+    AssetAlert {
+        bigint id PK
+        bigint setup_id FK
+        enum alert_category "data|sms|status|dormant_fee"
+        string alert_type "in_cost|in_percent|total_bytes|to_suspended|suspension_fee等"
+        string notification "desktop|email_default|email_alternative|push_notification"
+        bigint alert_limit "阈值"
         datetime created_at
         datetime updated_at
     }
@@ -656,11 +739,11 @@ erDiagram
     Plan {
         bigint id PK
         bigint resource_id FK
-        string code UK "资源方套餐 ID"
+        string code UK "资源方套餐ID"
         string name
-        decimal price "套餐价格"
-        decimal overage_price "套外价格"
-        bigint capacity "容量（字节）"
+        decimal price
+        decimal overage_price
+        bigint capacity "容量(字节)"
         string billing_cycle "月/季度/年"
         string update_cycle
         tinyint status "0-可用 1-停用"
@@ -670,7 +753,7 @@ erDiagram
 
     Subscription {
         bigint id PK
-        bigint asset_id FK
+        string iccid FK "Asset ICCID"
         bigint plan_id FK
         bigint resource_subscription_id "资源方侧订阅ID"
         datetime bound_at "首次绑定时间"
@@ -682,10 +765,10 @@ erDiagram
 
     CDRAccumulated {
         bigint id PK
-        bigint asset_id FK
+        string iccid FK "Asset ICCID"
         bigint plan_id FK
         bigint resource_id FK
-        date record_date "话单日期"
+        date record_date
         bigint rounded_bytes
         string mcc
         string mnc
@@ -694,55 +777,192 @@ erDiagram
         datetime end_time
         datetime bill_time
         datetime created_at
-        INDEX idx_asset_date(asset_id, record_date)
-        INDEX idx_plan_date(plan_id, record_date)
+        INDEX idx_iccid_date "iccid, record_date"
+        INDEX idx_plan_date "plan_id, record_date"
     }
+```
 
-    Bill {
-        bigint id PK
-        bigint account_id FK
-        bigint asset_id FK
-        bigint plan_id FK
-        string billing_period "YYYY-MM"
-        decimal plan_cost "套餐费用"
-        decimal overage_cost "套外费用"
-        decimal total_cost "总费用"
-        bigint total_usage "总用量"
-        tinyint status "0-未结算 1-已结算 2-已调整"
-        datetime created_at
-        datetime updated_at
-    }
+### Asset（SIM / Profile 统一资产模型）
 
-    AuditLog {
-        bigint id PK
-        bigint user_id FK
-        bigint account_id FK
-        string target_type "操作对象类型"
-        string target_id "操作对象ID"
-        string action_type "操作类型"
-        string request_summary "请求摘要"
-        string response_result "响应结果"
-        text before_value "操作前值"
-        text after_value "操作后值"
-        string source_ip
-        string trace_id UK
-        datetime created_at
-    }
+基于 POD `AssetSimcard` schema，SIM 和 Profile 使用同一张 `Asset` 表，通过 `asset_type` 区分。Profile 比 SIM 资产多 `profile_state`、`profile_type`、`ac_code`、`bootstrap_eid`、`target_state`、`target_eid`、`reserved`、`fallback_attribute` 等字段（SIM 类型下这些字段为 null）。
 
-    DashboardConfig {
-        bigint id PK
-        bigint account_id FK
-        string card_type "仪表盘卡片类型"
-        int sort_order
-        tinyint visible
-    }
+| 字段 | POD 对应 | 类型 | 必填 | SIM | Profile | 说明 |
+|------|----------|------|------|-----|---------|------|
+| iccid | iccid | varchar(30) PK | YES | YES | YES | 唯一标识 |
+| account_id | ownerAccountId | bigint FK | YES | YES | YES | 归属账户 |
+| asset_name | (setups[].assetName) | varchar(255) | NO | YES | YES | 资产名称 |
+| asset_type | type | enum | YES | `SIM` | `eSIM_Profile_M2M` / `eSIM_Profile_Consumer` / `eSIM_Profile_IoT` | 资产类型 |
+| status | status | enum | YES | YES | YES | active / inactive / suspended / preactive / deleted / terminated / unknown |
+| profile_state | profileState | enum | NO | NULL | YES | '' / onstock / disabled / enabled / created / deleted / available / locked / allocated / linked / confirmed / released / downloaded / installed / error |
+| profile_type | profileType | enum | NO | NULL | YES | '' / bootstrap / operational / preinstalled / virtual |
+| target_state | targetState | enum | NO | NULL | YES | disabled / enabled（可空；download-profile 可选立即 enable） |
+| target_eid | targetEid | varchar(30) | NO | NULL | YES | 异步操作目标 EID |
+| bootstrap_eid | bootstrapEid | varchar(30) | NO | NULL | YES | 绑定 Bootstrap Profile 的 EID |
+| ac_code | (CMP 扩展) | varchar(512) | NO | NULL | YES | GSMA SGP.22 激活码（Profile 导入时填写，download-profile 时使用） |
+| eid | (无直接对应) | varchar(30) | NO | YES | YES | 关联的 eSIM 设备 EID（下载后关联） |
+| model | model | varchar(100) | NO | YES | YES | 设备型号 |
+| imei | imei | varchar(20) | NO | YES | YES | 设备 IMEI |
+| msisdn | msisdn[] | varchar(20) | NO | YES | YES | 主号码（多号码取首个） |
+| virtual_msisdn | virtualMSISDN[] | json | NO | YES | YES | 虚拟号码 [{provider, msisdn}] |
+| ownership | ownership[] | json | NO | YES | YES | 归属链 [accountId, ...] |
+| fallback_attribute | fallbackAttribute | boolean | NO | NULL | YES | IoT Profile fallback 标志（默认 false） |
+| reserved | reserved | varchar(30) | NO | NULL | YES | 预留给哪个 EID |
+| batch_id | batchId | varchar(64) | NO | YES | YES | 批次 ID |
+| batch_name | batchName | varchar(128) | NO | YES | YES | 批次名称 |
+| external | external | boolean | NO | YES | YES | 是否外部资产 |
+| limit | limit | bigint | NO | YES | YES | 数据限制（字节） |
+| sms_limit | smsLimit | bigint | NO | YES | YES | 短信限制（条） |
+| fixed_ips | fixedIPs[] | json | NO | YES | YES | 固定 IP [{carrier, ip}] |
+| carriers | carriers | json | NO | YES | YES | 运营商配置对象（含 60+ 运营商布尔开关） |
+| last_call | lastCall | json | NO | YES | YES | {carrier, servingNetwork{mcc,mnc}, startTime, endTime, ipAddress, imei, bytes, roundedBytes} |
+| last_sms | lastSMS | json | NO | YES | YES | {type, endTime, originatingAddress, destinationAddress, servingNetwork{mcc,mnc}} |
+| security_services | securityServices[] | json | NO | YES | YES | 安全服务配置 [{poolId, name, type, carrier, ranges}] |
+| activation_date | activationDate | datetime | NO | YES | YES | 激活时间 |
+| deactivation_date | deactivationDate | datetime | NO | YES | YES | 停用时间 |
+| reactivation_date | reactivationDate | datetime | NO | YES | YES | 重新激活时间 |
+| subscription_date | subscriptionDate | datetime | NO | YES | YES | 订阅时间 |
+| suspension_date | suspensionDate | datetime | NO | YES | YES | 暂停时间 |
+| last_network_at | (由 lastCall.startTime 派生) | datetime | NO | YES | YES | 最后连接时间 |
+| created_at | — | datetime | YES | YES | YES | 创建时间 |
+| updated_at | — | datetime | YES | YES | YES | 更新时间 |
 
-    ResourcePwHistory {
-        bigint id PK
-        bigint resource_id FK
-        string old_password_hash
-        datetime changed_at
-    }
+> **说明：** POD 中 `carriers` 对象包含 60+ 运营商布尔字段（如 UKJ、UKAT、NAUS 等）。本地 CMP 将其存为 JSON，不在关系模型中展开。`subscriptions` 和 `bundles` 在本地拆分为独立的 `Subscription` 表 + `SubscriptionBundle` 表。`setups[].tags` 拆分为 `AssetSetup` 表 + `AssetTag` 表。
+
+### eSIM（eSIM 设备模型）
+
+基于 POD `eSIM` schema。eSIM 是 Profile 的容器设备，通过 EID 唯一标识。一个 eSIM 可包含多个 Profile（通过 `AssetProfile` 中间表关联 Asset 表）。
+
+| 字段 | POD 对应 | 类型 | 必填 | 说明 |
+|------|----------|------|------|------|
+| eid | eid | varchar(30) PK | YES | eSIM 唯一标识 |
+| account_id | ownerAccountId | bigint FK | YES | 归属账户 |
+| esim_type | type | enum | YES | M2M / Consumer / IoT |
+| ownership | ownership[] | json | NO | 归属链 [accountId, ...] |
+| asset_name | (setups[].eSimName) | varchar(255) | NO | eSIM 名称 |
+| group_name | (setups[].eSimGroupName) | varchar(128) | NO | eSIM 分组 |
+| enabled_profile_iccid | (enabledProfile.iccid) | varchar(30) FK | NO | 当前启用 Profile 的 ICCID → Asset.iccid |
+| external | external | boolean | NO | 是否外部 eSIM |
+| batch_id | batchId | varchar(64) | NO | 批次 ID |
+| batch_name | batchName | varchar(128) | NO | 批次名称 |
+| eim_tenant_id | eimTenantId | varchar(128) | NO | EIM 租户 ID（IoT SGP.32 专用） |
+| callback_status | callbackStatus | int | NO | 当前操作到期时间戳（0 = 无挂起操作） |
+| created_at | — | datetime | YES | 创建时间 |
+| updated_at | — | datetime | YES | 更新时间 |
+
+### AssetProfile（eSIM 内 Profile 关联）
+
+对应 POD `eSIM.profiles[]`，记录 eSIM 与已安装/已下载 Profile 的映射关系。
+
+| 字段 | POD 对应 | 类型 | 必填 | 说明 |
+|------|----------|------|------|------|
+| id | — | bigint PK | YES | 自增 ID |
+| eid | eid | varchar(30) FK | YES | 归属 eSIM → eSIM.eid |
+| iccid | iccid | varchar(30) FK | YES | 关联 Profile → Asset.iccid |
+| enabled | enabled | boolean | YES | 是否当前启用 |
+| bootstrap | bootstrap | boolean | YES | 是否 Bootstrap Profile |
+| status | status | enum | YES | active / inactive / suspended / preactive / unknown |
+| profile_state | profileState | enum | YES | onstock / disabled / enabled / created / deleted |
+| created_at | — | datetime | YES | 创建时间 |
+| updated_at | — | datetime | YES | 更新时间 |
+
+### AssetSetup（资产配置与标签）
+
+对应 POD `AssetSimcard.setups[]`，每个资产可有多条 setup 记录（不同账户视角）。
+
+| 字段 | POD 对应 | 类型 | 必填 | 说明 |
+|------|----------|------|------|------|
+| id | — | bigint PK | YES | 自增 ID |
+| iccid | (父 Asset.iccid) | varchar(30) FK | YES | 归属 Asset |
+| account_id | accountId | varchar(64) | YES | 配置所属账户 |
+| asset_name | assetName | varchar(255) | NO | 此账户下的资产名称 |
+| created_at | — | datetime | YES | 创建时间 |
+| updated_at | — | datetime | YES | 更新时间 |
+
+### AssetAlert（告警配置）
+
+对应 POD 的四种告警类型（`AssetDataAlerts`、`AssetSmsAlerts`、`AssetStatusAlerts`、`AssetDormantFeeAlerts`），合并到一张表。
+
+| 字段 | POD 对应 | 类型 | 必填 | 说明 |
+|------|----------|------|------|------|
+| id | — | bigint PK | YES | 自增 ID |
+| setup_id | (父 AssetSetup.id) | bigint FK | YES | 归属 Setup |
+| alert_category | (派生) | enum | YES | data / sms / status / dormant_fee |
+| alert_type | type | enum | YES | 见下方枚举表 |
+| notification | notification | enum | YES | desktop / email_default / email_alternative / push_notification |
+| alert_limit | limit | bigint | NO | 阈值 |
+| created_at | — | datetime | YES | 创建时间 |
+| updated_at | — | datetime | YES | 更新时间 |
+
+**alert_type 枚举值：**
+
+| alert_category | alert_type 可选值 |
+|----------------|-------------------|
+| data | in_cost, in_percent, out_cost, out_percent, in_bytes, out_bytes, total_bytes, limit_data |
+| sms | in_cost, in_percent, out_cost, out_percent, in_sms, out_sms, total_sms, limit_sms |
+| status | preactivation_depleted, to_suspended, to_active, to_preactive, to_inactive |
+| dormant_fee | suspension_fee, inactive_fee |
+
+### Subscription（订阅与套餐包）
+
+基于 POD `AssetSimcard.subscriptions`，将 subscriptions 和 bundles 拆分。
+
+| 字段 | POD 对应 | 类型 | 必填 | 说明 |
+|------|----------|------|------|------|
+| id | subscriptions.id | bigint PK | YES | 订阅 ID |
+| iccid | (父 Asset.iccid) | varchar(30) FK | YES | 归属 Asset |
+| account_id | subscriptions.accountId | varchar(64) | YES | 订阅所属账户 |
+| limit | subscriptions.limit | bigint | NO | 数据限制（字节） |
+| sms_limit | subscriptions.smsLimit | bigint | NO | 短信限制（条） |
+| plan_id | (CMP Plan.id) | bigint FK | NO | 关联套餐 |
+| resource_subscription_id | — | varchar(128) | NO | 资源方侧订阅 ID |
+| bound_at | — | datetime | NO | 首次绑定时间 |
+| current_cycle_start | — | datetime | NO | 当前计费周期起点 |
+| status | (派生) | enum | YES | active / suspended / unsubscribed |
+| created_at | — | datetime | YES | 创建时间 |
+| updated_at | — | datetime | YES | 更新时间 |
+
+**SubscriptionBundle（bundles 拆表）：**
+
+| 字段 | POD 对应 | 类型 | 必填 | 说明 |
+|------|----------|------|------|------|
+| id | — | bigint PK | YES | 自增 ID |
+| subscription_id | (父 Subscription.id) | bigint FK | YES | 归属 Subscription |
+| bundle_id | bundleId | varchar(64) | YES | 套餐包 ID |
+| local_product_id | localProductId | varchar(128) | NO | 本地产品 ID |
+| local_product_name | localProductName | varchar(255) | NO | 本地产品名称 |
+| df_products | dfProducts | json | NO | {DataPoolProduct, PerMbProduct, ...} |
+| type | type | varchar(64) | NO | 套餐包类型 |
+| initial_size | initialSize | bigint | NO | 初始容量（字节） |
+| remaining_bytes | remainingBytes | bigint | NO | 剩余字节 |
+| data_used | dataUsed | bigint | NO | 已用字节 |
+| cost | cost | number | NO | 成本 |
+| remaining_credit | remainingCredit | number | NO | 剩余额度 |
+| credit_used | creditUsed | number | NO | 已用额度 |
+| per_mb_cost | perMbCost | number | NO | 每 MB 成本 |
+| start_time | startTime | datetime | NO | 开始时间 |
+| end_time | endTime | datetime | NO | 结束时间 |
+| created_at | — | datetime | YES | 创建时间 |
+| updated_at | — | datetime | YES | 更新时间 |
+
+### SIM、Profile、eSIM 与 POD 的关系映射
+
+```
+POD AssetSimcard (asset_type=SIM)
+  └── local_cmp Asset (asset_type=SIM, iccid=PK)
+
+POD AssetSimcard (asset_type=eSIM Profile M2M/Consumer/IoT)
+  └── local_cmp Asset (asset_type=eSIM_Profile_*, iccid=PK, ac_code, profile_state, ...)
+
+POD eSIM
+  └── local_cmp eSIM (eid=PK)
+      └── profiles[] → AssetProfile (eid + iccid 关联 Asset)
+      └── enabledProfile → 引用 Asset.iccid
+      └── setups[] → 额外信息存入 eSIM.asset_name / eSIM.group_name
+
+POD AssetSimcard.setups[]
+  └── local_cmp AssetSetup (每个 setup 一行)
+      └── alerts[] → AssetAlert (每个告警规则一行)
+      └── tags[] → 可扩展 AssetTag 表 (key, value)
 ```
 
 ### 索引策略
