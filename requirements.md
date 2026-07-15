@@ -571,3 +571,4 @@ Local_CMP 是一个面向企业客户的物联网连接管理平台。平台通�
 | V2.0.1 | 2026-06-23 | AI Coding Agent | 补全权限矩阵定义（权限组列表 + 页面操作映射） |
 | V2.1.0 | 2026-07-13 | AI Coding Agent | 基于原始 V1.0.2 第三章重新设计账户/用户/权限模块：新增账户类型层级体系（root/reseller/customer）、reseller 三层级联链路、权限命名对齐原始 ADMIN_ 前缀、新增 read_only 角色、完善权限矩阵 |
 | V2.2.0 | 2026-07-13 | AI Coding Agent | 基于 POD API.txt (API v3.6) 重新设计 REQ-14 对接资源方接口：补齐 assets 模块 37 个端点（含 SIM 全生命周期 + Multi-IMSI + Consumer eSIM Profile）和 esims 模块 34 个端点（含 eSIM 全生命周期 + Profile 操作 + SGP.32 IoT 专用） |
+| V2.2.1 | 2026-07-13 | AI Coding Agent | 新增 Profile 导入至删除完整生命周期设计（design.md）：定义 Profile 资产模型（含 ac_code 字段）、状态机（onstock→downloading→disabled→enabled→删除）、各阶段 API 流程与前置条件 |

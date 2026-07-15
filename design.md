@@ -1029,7 +1029,306 @@ POD 的 `esims` 模块共计 34 个端点，覆盖 eSIM 设备及 Profile 的完
 | PUT | `/api/assets/profile/{iccid}/name` | ADMIN_PROFILE | 修改名称 |
 | DELETE | `/api/assets/profile/{iccid}` | ADMIN_PROFILE | 删除 |
 
+---
+
+### Profile 导入与生命周期状态机
+
+Profile 在导入到平台后即被视为一种特殊的 SIM 资产，其特点在于比 SIM 资产多一个关键字段 `ac_code`（Activation Code），该字段用于发起 eSIM Profile 下载操作。根据 GSMA SGP.02（M2M）和 SGP.22（Consumer）规范，Profile 的生命周期遵循严格的状态机约束。
+
+#### Profile 资产模型（与 SIM 资产对比）
+
+| 字段 | 类型 | 说明 | SIM | Profile |
+|------|------|------|-----|---------|
+| iccid | string | 唯一标识 | YES | YES |
+| name | string | 资产名称 | YES | YES |
+| accountId | string | 归属账户 | YES | YES |
+| type | enum | `SIM` / `eSIM Profile M2M` / `eSIM Profile Consumer` | `SIM` | Profile 类型 |
+| status | enum | 网络状态（Installed / Activated / Suspended / Terminated） | YES | YES |
+| profile_state | enum | Profile 生命周期状态（onstock / downloading / disabled / enabled） | N/A | YES |
+| ac_code | string | GSMA 激活码（含 SM-DP+ 地址和匹配 ID 信息） | N/A | YES |
+| eid | string | 绑定 eSIM 的 EID（下载后关联） | N/A | YES |
+| carriers | object | 运营商配置 | YES | YES |
+| msisdn | string | 号码 | YES | YES |
+
+#### Profile 状态机
+
+```
+                          +----------+
+                          | onstock  |  <-- 导入后初始状态
+                          +----+-----+
+                               |
+                     download-profile
+                     (使用 ac_code)
+                               |
+                               v
+                        +------+------+
+                        | downloading |
+                        +-------------+
+                         |           |
+                    success       failure
+                         |           |
+                         v           v
+                  +----------+   +----------+
+  enable=true --> | enabled  |   |  failed  | (重试或回退至 onstock)
+                  +----+-----+   +----------+
+                       |
+                  disable-profile
+                       |
+                       v
+                  +----------+
+                  | disabled |
+                  +----+-----+
+                       |
+                  delete-profile
+                       |
+                       v
+                  (已删除，不可恢复)
+```
+
+**状态定义与转移规则：**
+
+| 当前状态 | 允许操作 | 目标状态 | 前置条件 |
+|----------|----------|----------|----------|
+| onstock | download-profile | downloading | Profile 已导入且 ac_code 有效；必须已绑定目标 eSIM（有 EID） |
+| downloading | (异步完成) | enabled | download-profile 请求中 `enable: true`；SM-DP+ 返回成功 |
+| downloading | (异步完成) | disabled | download-profile 请求中 `enable: false`（或未传）；SM-DP+ 返回成功 |
+| downloading | (异步完成) | failed | SM-DP+ 返回失败；可重试或手动回退至 onstock |
+| enabled | disable-profile | disabled | 仅 M2M：自动禁用当前启用的 Profile，无需传 ICCID |
+| enabled | disable-profile | disabled | 仅 IoT：必须指定 ICCID |
+| disabled | enable-profile | enabled | Profile 已安装在 eSIM 上（非 onstock）；M2M 须为 disabled 状态；IoT 接受任意已安装状态 |
+| disabled | delete-profile | (删除) | Profile 非 Bootstrap Profile；M2M：已存在数据库中且属于该 eSIM |
+| enabled | delete-profile | (删除) | M2M：系统先自动 disable 再删除；Bootstrap Profile 不可删除 |
+
+#### 流程一：Profile 导入
+
+Profile 导入时通过 `POST /api/assets/sim` 创建资产记录，type 字段设为 `eSIM Profile M2M` 或 `eSIM Profile Consumer`。
+
+**请求示例：**
+
+```json
+POST /api/assets/sim
+{
+  "accountId": "acc-456",
+  "iccid": "8988247000000000001",
+  "type": "eSIM Profile M2M",
+  "name": "Profile-Example",
+  "ac_code": "1$SMDP.EXAMPLE.COM$MATCHING-ID-001",
+  "carriers": { "mcc": "460", "mnc": "01" }
+}
+```
+
+**后端处理：**
+1. 校验 `accountId` 存在且有效
+2. 校验 `iccid` 全局唯一
+3. 校验 `type` 含 Profile 关键字时 `ac_code` 为必填
+4. 创建 asset 记录，`profile_state = onstock`
+5. 返回 201 + asset 对象
+
+#### 流程二：下载 Profile（download-profile）
+
+**API:** `POST /api/assets/esim/{eid}/download-profile`  
+**权限:** ADMIN_eSIM  
+**前置条件:** Profile 处于 `onstock` 状态，且与目标 eSIM 属同一账户
+
+**请求示例（M2M）：**
+
+```json
+POST /api/assets/esim/EID-EXAMPLE-001/download-profile
+{
+  "accountId": "acc-456",
+  "iccid": "8988247000000000001",
+  "enable": false,
+  "callbackUrl": "https://cmp.example.com/api/callback/download"
+}
+```
+
+**请求示例（IoT SGP.32）：**
+
+```json
+POST /api/assets/esim/EID-EXAMPLE-001/download-profile
+{
+  "accountId": "acc-456",
+  "iccid": "8988247000000000001",
+  "type": 0,
+  "enable": true,
+  "callbackUrl": "https://cmp.example.com/api/callback/download"
+}
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| accountId | YES | 账户 ID，须与 Profile 和 eSIM 的归属账户一致 |
+| iccid | M2M 必填 / IoT type=0 必填 | 要下载的 Profile ICCID |
+| enable | NO | 下载完成后是否立即启用（默认 false），仅 M2M 支持 |
+| type | IoT 必填 | 下载方式：0=ICCID, 1=CONTACT_DEFAULT_SMDP, 2=CONTACT_DEFAULT_SMDS, 3=CONTACT_SMDS, 4=PROFILE_TYPE |
+| data | 条件必填 | type=3 时的 SM-DS 地址，格式 `https://smds.example.com` |
+| profileType | 条件必填 | type=4 时的 Profile 类型（如 `consumer`, `iot`, `automotive`） |
+| uuid | NO | 操作跟踪 ID |
+| callbackUrl | NO | 异步操作完成通知 URL |
+
+**后端处理（同步模式 — Traditional eSIM）：**
+1. 校验 `accountId` 对 eSIM 和 Profile 有操作权限
+2. 查询 Profile：校验 `profile_state == onstock`
+3. 校验 Profile 的 `ac_code` 有效
+4. 发起 SM-DP+ 下载请求（传入 ac_code 中编码的 SM-DP+ 地址和 matching ID）
+5. 更新 `profile_state = downloading`
+6. SM-DP+ 返回成功后：
+   - 若 `enable == true` 则 `profile_state = enabled`
+   - 否则 `profile_state = disabled`
+   - 设置 `eid` 为目标 eSIM 的 EID
+7. 若 SM-DP+ 返回失败：`profile_state = failed`，返回错误信息
+
+**后端处理（异步模式 — SMS-less eSIM）：**
+1. 校验权限和前置状态（同上）
+2. `profile_state = downloading`
+3. 立即返回 202 Accepted
+4. 异步执行 SM-DP+ 下载
+5. 完成后通过 callbackUrl 通知结果，更新 profile_state
+
+```mermaid
+sequenceDiagram
+    participant Admin as 管理员
+    participant CMP as CMP 平台
+    participant SMDP as SM-DP+
+
+    Admin->>CMP: POST download-profile (eid, iccid, enable)
+    activate CMP
+    CMP->>CMP: 校验权限、profile_state=onstock、ac_code 有效
+    CMP->>CMP: profile_state = downloading
+    CMP->>SMDP: ES2+ DownloadProfile(ac_code)
+    SMDP-->>CMP: Profile Package
+    alt enable=true
+        CMP->>CMP: profile_state = enabled
+    else enable=false
+        CMP->>CMP: profile_state = disabled
+    end
+    deactivate CMP
+    CMP-->>Admin: 返回结果 + 新状态
+```
+
+#### 流程三：启用 Profile（enable-profile）
+
+**API:** `POST /api/assets/esim/{eid}/enable-profile`  
+**权限:** ADMIN_eSIM  
+**前置条件:** Profile 处于 `disabled` 状态（M2M）或已安装（IoT）
+
+```json
+POST /api/assets/esim/EID-EXAMPLE-001/enable-profile
+{
+  "accountId": "acc-456",
+  "iccid": "8988247000000000001",
+  "callbackUrl": "https://cmp.example.com/api/callback/enable"
+}
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| accountId | YES | 账户 ID |
+| iccid | YES | 要启用的 Profile ICCID |
+| uuid | NO | 操作跟踪 ID |
+| callbackUrl | NO | 异步通知 URL |
+| rollback | NO | IoT 失败回滚标志 |
+
+**后端处理（M2M）：**
+1. 校验 Profile `profile_state == disabled`
+2. 校验 eSIM 上当前启用的 Profile（如有）将被自动禁用
+3. 通过 ES2+ 发起启用请求
+4. `profile_state = enabled`
+5. 更新 eSIM 的 `enabled_profile` 为该 ICCID
+
+**后端处理（IoT SGP.32）：**
+1. 校验 Profile 存在且已安装在 eUICC 上（任意状态）
+2. 通过 ES10b IPA 发起启用
+3. `profile_state = enabled`
+
+#### 流程四：禁用 Profile（disable-profile）
+
+**API:** `POST /api/assets/esim/{eid}/disable-profile`  
+**权限:** ADMIN_eSIM  
+**前置条件:** Profile 必须处于 `enabled` 状态
+
+```json
+POST /api/assets/esim/EID-EXAMPLE-001/disable-profile
+{
+  "accountId": "acc-456",
+}
+```
+
+M2M 模式不需要传 ICCID（自动禁用当前启用的 Profile），IoT 模式需传 ICCID。
+
+**后端处理（M2M）：**
+1. 获取 eSIM 当前启用的 Profile
+2. 校验该 Profile `profile_state == enabled`
+3. 通过 ES2+ 发起禁用请求
+4. `profile_state = disabled`
+5. 自动启用 Bootstrap Profile（保障基本连接）
+6. 清空 eSIM 的 `enabled_profile`
+
+**后端处理（IoT SGP.32）：**
+1. 校验指定 ICCID 的 Profile `profile_state == enabled`
+2. 通过 ES10b IPA 发起禁用
+3. `profile_state = disabled`
+4. 若禁用的是最后一个 enabled profile 且 eSIM 有 bootstrap/fallback profile，自动启用
+
+#### 流程五：删除 Profile（delete-profile）
+
+**API:** `POST /api/assets/esim/{eid}/delete-profile`  
+**权限:** ADMIN_eSIM  
+**前置条件:** Profile 不能为 Bootstrap Profile
+
+```json
+POST /api/assets/esim/EID-EXAMPLE-001/delete-profile
+{
+  "accountId": "acc-456",
+  "iccid": "8988247000000000001"
+}
+```
+
+批量删除（多个 ICCID）：
+
+```json
+POST /api/assets/esim/EID-EXAMPLE-001/delete-profile
+{
+  "accountId": "acc-456",
+  "iccids": ["8988247000000000001", "8988247000000000002"]
+}
+```
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| accountId | YES | 账户 ID |
+| iccid | YES（单删） | 要删除的 Profile ICCID |
+| iccids | YES（批删） | ICCID 数组，若传入则忽略 iccid |
+| uuid | NO | 操作跟踪 ID |
+| callbackUrl | NO | 异步通知 URL |
+
+**后端处理（M2M）：**
+1. 校验目标 Profile 非 Bootstrap Profile
+2. 若 `profile_state == enabled`，先执行 disable 流程（自动使能 Bootstrap）
+3. 通过 ES2+ 发起删除请求
+4. Profile 资产标记为已删除或清除 eid 关联
+
+**后端处理（IoT SGP.32）：**
+1. 校验 Profile 存在于 eUICC 上
+2. 通过 ES10b IPA 发起删除
+3. Profile 资产标记为已删除
+
+#### 状态与操作可用性对照表
+
+```
+阶段      profile_state    download   enable   disable   delete   subscribe
+导入后    onstock            ✓          ✗        ✗         ✗        ✗
+下载中    downloading        ✗          ✗        ✗         ✗        ✗
+已安装    disabled           ✗          ✓        ✗         ✓        ✗
+已启用    enabled            ✗          ✗        ✓         ✓*       ✓
+下载失败  failed             ✓(重试)    ✗        ✗         ✗        ✗
+```
+
+> *enabled 状态下 delete，M2M 自动先 disable 再删除；IoT 直接删除。
+
 #### 套餐
+
+
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
