@@ -10,13 +10,13 @@ Local_CMP 是一个面向企业客户的物联网连接管理平台。平台通�
 
 | 术语 | 定义 |
 |------|------|
-| **账户 (Account)** | 资产容器，所有资产严格归属特定账户，账户间逻辑隔离。分为 root、reseller、customer 三种类型 |
-| **root 账户** | 平台超级管理员账户（GD 内部），编码前缀 `ACC_ROOT`，具备全局视图和全局管理能力 |
-| **reseller 账户** | 独立结算的企业主体，编码前缀 `ACC_ENT_reseller`，可创建下级账户并划拨资产，链路上限三层（reseller → reseller → customer） |
-| **customer 账户** | 终端企业客户，编码前缀 `ACC_ENT_customer`，不可创建下级账户 |
-| **账户层级 (Account Level)** | 账户在 reseller 链路中的层级位置，root=0，一级 reseller=1，二级 reseller=2，customer=3 |
-| **用户 (User)** | 操作执行者，必须挂载于账户下 |
-| **权限 (Role)** | 赋予用户的操作授权，由一组权限组组成，命名规范为 `ADMIN_资产类型` 或 `read_资产类型` |
+| **账户 (Account)** | 资产容器，所有资产严格归属特定账户，账户间逻辑隔离。分为 root、reseller、customer 三种类型。除 root 外，每个账户必须有且仅有一个归属上级账户，形成严格的树状层级结构 |
+| **root 账户** | 平台超级管理员账户（GD 内部），编码前缀 `ACC_ROOT`，具备全局视图和全局管理能力。root 是账户树根节点，无上级账户 |
+| **reseller 账户** | 独立结算的企业主体，编码前缀 `ACC_ENT_reseller`，可创建下级 reseller 和 customer 账户并划拨资产，链路上限不限 reseller 层级，但叶子必须是 customer |
+| **customer 账户** | 终端企业客户，编码前缀 `ACC_ENT_customer`，不可创建任何下级账户（customer 始终是叶子节点） |
+| **账户层级 (Account Level)** | 账户在树状结构中的层级位置，root=0，一级 reseller=1，二级 reseller/customer=2，以此类推，无硬性上限，但 customer 始终为叶子节点 |
+| **用户 (User)** | 操作执行者，必须挂载于一个账户下。用户之间不存在上下级关系，不同账户下的用户彼此完全隔离，用户仅与归属账户相关。登录由用户凭据（用户名+密码）完成 |
+| **权限 (Role)** | 赋予用户的操作授权，由一组权限组组成，命名规范为 `ADMIN_资产类型` 或 `read_资产类型`。权限是用户级别的，不同用户可以拥有不同权限组合 |
 | **资源方 (Resource Provider)** | 提供底层网络资源与技术能力的供应商，如 POD、BICS、CITIC |
 | **资产 (Asset)** | 系统中管理的 SIM 卡、eSIM 设备、Profile 的统称 |
 | **套餐 (Plan/Product)** | 商用套餐，定义容量、价格、计费周期等 |
@@ -33,21 +33,34 @@ Local_CMP 是一个面向企业客户的物联网连接管理平台。平台通�
 
 ### REQ-1: 账户管理
 
-**User Story:** AS 平台管理员，I want 管理多层级企业账户体系，so that 平台支持 root、reseller、customer 三种账户类型，reseller 可在三层链路内自建下级账户并划拨资产。
+**User Story:** AS 平台管理员，I want 管理多层级企业账户体系，so that 平台支持 root、reseller、customer 三种账户类型，reseller 可创建下级 reseller 和 customer 账户，形成无硬性链长限制的树状层级，叶子节点必须为 customer。
 
 #### REQ-1-1: 账户类型与层级
 
 | 账户类型 | 编码 | 层级 | 说明 |
 |----------|------|------|------|
-| root | ACC_ROOT | 0 | 平台顶级管理机构（GD 内部），统筹全局资源 |
-| reseller | ACC_ENT_reseller | 1 ~ 2 | 独立结算的企业主体，可创建下级账户并划拨资产 |
-| customer | ACC_ENT_customer | 2 ~ 3 | 终端企业客户，不可创建下级账户 |
+| root | ACC_ROOT | 0 | 平台顶级管理机构（GD 内部），统筹全局资源，无上级账户 |
+| reseller | ACC_ENT_reseller | 1 ~ N | 独立结算的企业主体，可创建下级 reseller 和 customer 账户并划拨资产 |
+| customer | ACC_ENT_customer | 2 ~ N | 终端企业客户，不可创建任何下级账户（始终为叶子节点） |
 
 1. THE 系统 SHALL 支持 root、reseller、customer 三种账户类型。
-2. THE 系统 SHALL 约束 reseller 链路最多三层：reseller(1) → reseller(2) → customer(3)。
-3. WHEN 账户类型为 customer，THE 系统 SHALL 禁止该账户创建任何下级账户。
-4. WHEN 创建下级账户，THE 系统 SHALL 校验上级账户层级 + 1 < 4，且上级账户类型为 reseller。
+2. THE 系统 SHALL 确保除 root 外，每个账户有且仅有一个归属上级账户（parent_account_id 必填），形成严格的树状层级结构。
+3. WHEN 账户类型为 customer，THE 系统 SHALL 禁止该账户创建任何下级账户（customer 始终为叶子节点）。
+4. WHEN 创建下级账户，THE 系统 SHALL 校验上级账户类型为 reseller；若上级为 root，可创建一级 reseller 或 customer；若上级为 reseller，可创建下级 reseller 或 customer，无 hard limit on 链长，但 customer 必须为叶子。
 5. THE 系统 SHALL 确保每个账户有全局唯一编码，按类型前缀生成：ACC_ROOT / ACC_ENT_{type}。
+
+**账户层级示例：**
+
+```
+国 (root) ── 省 (reseller) ── 市 (reseller) ── 县 (reseller) ── 乡 (reseller) ── 村 (customer)
+                    └── 直辖市 (reseller) ── 区 (reseller) ── 街道 (customer)
+```
+
+```
+捷德 (root) ── A (reseller) ── B (reseller) ── C (reseller) ── D (customer)
+```
+
+6. WHEN 创建下级账户，上级账户可以是本条链路中任意 reseller 或 root 类型账户。例如：创建 C 账户时，上级账户可选 B（直接上级），也可由捷德（root）或 A（reseller）直接创建，但 parent_account_id 必须填写 B（即账户的真实直接上级）。
 
 #### REQ-1-2: 账户生命周期
 
@@ -86,12 +99,15 @@ Local_CMP 是一个面向企业客户的物联网连接管理平台。平台通�
 5. WHEN 用户处于停用状态，THE 系统 SHALL 拒绝该用户登录 Portal 以及所有 API 调用。
 6. THE 系统 SHALL 使用用户邮箱执行密码重置、告警通知和系统通知。
 7. THE 系统 SHALL 支持为用户分配多个权限组，权限组可灵活组合。
+8. THE 系统 SHALL 确保用户之间不存在上下级关系：所有用户地位平等，仅通过所归属的账户和所拥有的权限组区分操作能力。
+9. WHEN 用户 A 归属账户 X，用户 B 归属账户 Y（X != Y），THE 系统 SHALL 使 A 与 B 完全隔离：A 无法查看或操作 B 的信息，也无法查看或操作 Y 账户的资产，反之亦然。
+10. WHEN 用户登录系统，THE 系统 SHALL 根据其归属账户和拥有的权限组确定可操作的数据范围：数据范围限定为该用户归属账户及其下级账户（若上级账户用户拥有管理权限）。
 
 ---
 
 ### REQ-3: 权限管理
 
-**User Story:** AS 平台管理员，I want 为不同角色分配权限，so that 用户只能在授权范围内操作。
+**User Story:** AS 平台管理员，I want 为不同角色分配权限，so that 用户只能在授权范围内操作。权限是赋予用户的数据操作授权，不是账户级别的配置。同一个账户下的不同用户可以拥有不同的权限组组合（例如"国"这个 root 账户下可以有国务院（ADMIN_ALL）、财政部（ADMIN_Billing + read_SIM）、工信部（ADMIN_SIM + ADMIN_eSIM）等多个用户，各自权限不同）。
 
 #### REQ-3-1: 权限组定义（基于 V1.0.2 第三章 TABLE 3，命名规范：`操作_资产类型`）
 
@@ -151,10 +167,12 @@ Local_CMP 是一个面向企业客户的物联网连接管理平台。平台通�
 1. THE 系统 SHALL 预设上述标准权限组，权限组命名遵循规范：`ADMIN_资产类型` 或 `read_资产类型`。
 2. THE 系统 SHALL 支持将多个权限组组合分配给用户。
 3. WHEN 用户执行任何操作，THE 系统 SHALL 校验用户拥有对应权限组。
-4. WHEN 用户权限为 ADMIN_ALL 或 read_ALL 之外的角色，THE 系统 SHALL 将操作范围限制在用户所属账户内。
+4. WHEN 用户权限非 ADMIN_ALL 或 read_ALL，THE 系统 SHALL 将操作范围限制在用户所属账户内。
 5. WHEN root 账户用户访问系统，THE 系统 SHALL 提供全局视图和全局管理能力。
-6. WHEN reseller 通过 API 或 Portal 操作二级企业客户，THE 系统 SHALL 限制操作范围仅为其名下的下级客户数据（按账户层级树向下递归）。
-7. WHEN reseller 通过 API 创建下级账户，THE 系统 SHALL 校验当前 account_level + 1 < 4，确保不超过三层链路。
+6. WHEN 上级账户的用户操作下级账户数据，THE 系统 SHALL 允许其查询/管理名下所有下级账户（按账户层级树向下递归）的数据。
+7. WHEN 下级账户的用户操作数据，THE 系统 SHALL 仅允许操作本账户数据，不可向上访问上级账户数据。
+8. THE 系统 SHALL 确保同一个账户下的不同用户可以拥有不同的权限组组合，实现同一账户下不同角色（如财务、运维、管理）的权限隔离。
+9. WHEN 用户仅拥有 read_only 权限，THE 系统 SHALL 允许其查看账户下所有信息但不允许任何管理操作。
 
 ---
 
@@ -575,3 +593,4 @@ Local_CMP 是一个面向企业客户的物联网连接管理平台。平台通�
 | V2.2.2 | 2026-07-13 | AI Coding Agent | 基于 POD API.txt AssetSimcard/eSIM schema 重建 Data Models：Asset 表对齐 POD 42 个字段（status/profileState/carriers/lastCall/lastSMS/securityServices）；新增 eSIM/AssetProfile/AssetSetup/AssetAlert/Subscription/SubscriptionBundle 表；Account 表补齐地址/税务/时区/语言等字段 |
 | V2.2.3 | 2026-07-13 | AI Coding Agent | 更新 Profile 状态机：delete-profile 完成后根据 repeat_download 参数恢复至 onstock（可重复下载）或进入 terminated（终端不可复用）；Asset 模型新增 repeat_download 字段 |
 | V2.2.4 | 2026-07-13 | AI Coding Agent | 简化状态机为线性 onstock→installed→disabled→enabled→disabled→onstock/terminated；installed 可直接 disable；disabled 可重新 enable；onstock 不绑定 EID 可被任意 eSIM 选中下载 |
+| V2.3.0 | 2026-07-13 | AI Coding Agent | 重构账户/用户/资产关系逻辑：①除 root 外每个账户必须有归属上级，形成严格树状层级；②reseller 链长无硬性限制（不受三层约束），customer 必为叶子；③用户之间无上下级关系，不同账户用户完全隔离；④权限是用户级别的，同账户下不同用户可拥有不同权限组合；⑤上级账户用户可向下递归管理下级账户资产和用户；⑥登录依赖用户凭据，非账户 |

@@ -10,7 +10,7 @@
 
 Local_CMP 是一个面向企业客户的物联网连接管理平台（Connectivity Management Platform）。平台通过对接上游资源方（POD、BICS、CITIC），向下游企业客户提供统一的 SIM/eSIM 生命周期管理、套餐订阅、话单查询及计费服务。系统采用"可视化 Portal + 开放式 API"双通道交互模式。
 
-**账户层级体系**：平台采用 root → reseller → customer 三级账户类型，reseller 链路最多三层（reseller → reseller → customer）。root 账户（GD 内部）具备全局管理能力，reseller 可创建下级账户并划拨资产，customer 为终端客户不可创建下级。
+**账户层级体系**：平台采用 root → reseller → customer 三种账户类型。root 为树根（无上级），reseller 可创建下级 reseller 和 customer，customer 始终为叶子节点不可创建下级。账户之间形成严格的树状层级：除 root 外每个账户都必须有归属上级账户。用户归属账户、权限赋予用户、资产归属账户，三者关系清晰：用户在账户下创建并赋权后，即可对归属账户的资产进行操作，上级账户用户可向下管理下级账户资产。
 
 ---
 
@@ -97,27 +97,57 @@ flowchart LR
 
 ```mermaid
 graph TD
-    Root["root 账户<br/>ACC_ROOT<br/>level=0<br/>全局管理"]
-    Reseller1["reseller 账户<br/>ACC_ENT_reseller<br/>level=1<br/>可建下级"]
-    Reseller2["reseller 账户<br/>ACC_ENT_reseller<br/>level=2<br/>可建下级"]
-    Customer["customer 账户<br/>ACC_ENT_customer<br/>level=3<br/>终端客户"]
-    User["用户<br/>操作执行者"]
-    Role["权限组<br/>ADMIN_/read_ 前缀"]
-    Asset["资产<br/>SIM/eSIM/Profile"]
+    Root["root 账户 (ACC_ROOT, level=0, 无上级)"]
+    Reseller1["reseller 账户 (level=1)"]
+    Reseller2["reseller 账户 (level=2)"]
+    ResellerN["reseller 账户 (level=N)"]
+    Customer["customer 账户 (叶子节点)"]
 
-    Root -->|"管理"| Reseller1
-    Root -->|"管理"| Customer
-    Reseller1 -->|"创建/管理"| Reseller2
-    Reseller2 -->|"创建/管理"| Customer
-    Root -->|"归属"| Asset
-    Reseller2 -->|"划拨归属"| Asset
-    Customer -->|"归属"| Asset
-    Root -->|"归属"| User
-    Reseller1 -->|"归属"| User
-    Customer -->|"归属"| User
-    User -->|"被授予"| Role
-    Role -->|"限定操作范围"| Asset
+    UserRoot1["用户A (root账户下)"]
+    UserRoot2["用户B (root账户下, 不同权限)"]
+    UserR1["用户C (reseller1账户下)"]
+    UserR2["用户D (reseller2账户下)"]
+    UserCust["用户E (customer账户下)"]
+
+    Role1["权限组"]
+    Role2["权限组"]
+
+    AssetR1["资产 (归属 reseller1)"]
+    AssetR2["资产 (归属 reseller2)"]
+    AssetCust["资产 (归属 customer)"]
+
+    Root --> Reseller1
+    Root --> Customer
+    Reseller1 --> Reseller2
+    Reseller2 --> ResellerN
+    ResellerN --> Customer
+
+    Root --- UserRoot1
+    Root --- UserRoot2
+    Reseller1 --- UserR1
+    Reseller2 --- UserR2
+    Customer --- UserCust
+
+    UserRoot1 --> Role1
+    UserRoot2 --> Role2
+    UserR1 --> Role1
+    UserCust --> Role2
+
+    Reseller1 --- AssetR1
+    Reseller2 --- AssetR2
+    Customer --- AssetCust
+
+    Role1 --> AssetR1
+    Role2 --> AssetCust
 ```
+
+**关系说明：**
+- 账户之间形成严格的树状层级，除 root 外每个账户有唯一上级（实线箭头）
+- 用户归属账户（虚线），用户之间无任何关系，不同账户用户完全隔离
+- 权限赋予用户（`User → Role`），同一账户的不同用户可拥有不同权限组合
+- 资产归属账户（`Account → Asset`）
+- 用户通过拥有的权限对归属账户下的资产执行对应操作
+- 上级账户的用户可以向下管理（递归）下级账户的资产和用户
 
 ---
 
@@ -587,8 +617,8 @@ erDiagram
         string code UK "全局唯一编码 ACC_ROOT/ACC_ENT_{type}"
         string name
         string account_type "root/reseller/customer"
-        tinyint level "0=root 1/2=reseller 2/3=customer"
-        bigint parent_id FK "上级账户"
+        tinyint level "0=root 1+=reseller N+=customer, 无硬性上限"
+        bigint parent_id FK "上级账户 (root为NULL, 其余必填)"
         varchar currency "CNY/USD/EUR 默认 CNY"
         varchar tax_id "税务标识"
         text billing_disclaimer "账单免责声明"
@@ -999,7 +1029,7 @@ Authorization: Bearer <token>
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
-| POST | `/api/accounts` | ADMIN_Account | 创建下级企业账户（校验层级合法性） |
+| POST | `/api/accounts` | ADMIN_Account | 创建下级企业账户（校验：①上级为 reseller 或 root，②若上级为 root 可创建任意类型，③若上级为 reseller 可创建 reseller 或 customer，④customer 不可为上级） |
 | GET | `/api/accounts` | ADMIN_ALL | 查询所有账户列表 |
 | GET | `/api/accounts/{id}` | ADMIN_Account | 查询账户详情 |
 | GET | `/api/accounts/{id}/children` | ADMIN_Account | 查询下级账户列表（按层级树） |
@@ -1635,7 +1665,7 @@ delete 恢复  onstock            ✓          ✗        ✗         ✗       
 ### 数据一致性
 
 1. **资产归属唯一性**: 每个 asset 的 `account_id` 不可为 NULL，且迁移需事务保证。
-2. **账户层级约束**: 创建下级账户时，parent 的 `account_type` 必须为 reseller，且 `parent.level + 1 < 4`。
+2. **账户层级约束**: 创建下级账户时，parent 的 `account_type` 必须为 reseller（或 root 创建任意一级），customer 不可为任何账户的上级。
 3. **账户删除级联校验**: 删除账户前必须事务性检查 `asset`、`user`、`bill` 表中无关联记录，且该账户下无子账户（`parent_id` 无引用）。
 4. **reseller 停用级联**: 停用 reseller 账户时，需级联标记其所有下级账户（递归）为只读状态，禁止其下的写操作。
 5. **套餐订阅幂等性**: 同一资产同一套餐重复订阅请求返回已有订阅记录。
@@ -1666,8 +1696,8 @@ delete 恢复  onstock            ✓          ✗        ✗         ✗       
 |-----------|------------|------|----------|
 | 400 | INVALID_PARAM | 请求参数格式错误 | "请求参数格式有误，请检查后重试" |
 | 400 | INVALID_ACCOUNT_TYPE | 账户类型不合法 | "不支持的账户类型，仅支持 reseller 和 customer" |
-| 400 | MAX_LEVEL_EXCEEDED | 账户层级超限 | "账户层级已达上限（三层），无法继续创建下级账户" |
-| 400 | PARENT_NOT_RESELLER | 上级账户非 reseller | "仅 reseller 类型账户可创建下级账户" |
+| 400 | MAX_LEVEL_EXCEEDED | 账户层级超限 | "account_type=customer 不支持创建下级账户" |
+| 400 | PARENT_NOT_RESELLER | 上级账户不合法 | "仅 reseller 或 root 类型账户可创建下级账户" |
 | 401 | TOKEN_EXPIRED | token 过期 | "登录已过期，请重新登录" |
 | 401 | INVALID_CREDENTIALS | 用户名或密码错误 | "用户名或密码错误" |
 | 403 | PERMISSION_DENIED | 无操作权限 | "无此操作权限" |
@@ -1724,9 +1754,11 @@ delete 恢复  onstock            ✓          ✗        ✗         ✗       
 
 #### 账户管理
 
-- 创建账户生成唯一编码（含类型前缀 ACC_ROOT / ACC_ENT_{type}）
-- 创建 reseller 账户后，reseller 可创建下级账户
-- 创建第三级 customer 后，该 customer 不可再创建下级
+- 创建账户生成唯一编码（含类型前缀 ACC_ROOT / ACC_ENT_{type}），除 root 外 parent_id 必填
+- 创建 reseller 账户后，reseller 可创建下级 reseller 或 customer
+- 创建 customer 后，该 customer 不可再创建任何下级账户
+- customer 的 parent 必须为 reseller 类型
+- reseller 可以创建多级 reseller（无硬性限制），但链路的叶子必须是 customer
 - 停用 reseller 账户后，其所有下级账户的写操作被拒绝
 - 删除有资产的账户返回 ACCOUNT_NOT_EMPTY 错误
 - 删除有空子账户的账户返回 ACCOUNT_HAS_CHILDREN 错误
@@ -1739,7 +1771,9 @@ delete 恢复  onstock            ✓          ✗        ✗         ✗       
 - root 账户可查看全平台数据
 - read_only 用户可查看账户下所有信息但无管理操作权限
 - reseller 可递归查看名下所有下级账户的聚合数据
-- reseller 仅可在其层级链路内创建下级账户（不超过三层）
+- 同一账户下不同权限的用户只能操作各自权限范围内的资产
+- 下级账户用户无法查看或操作上级账户数据
+- 不同账户用户之间完全隔离，无法互访对方账户数据和用户信息
 
 #### 套餐订阅与计费
 
