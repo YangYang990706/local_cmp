@@ -159,6 +159,106 @@ C 的 ADMIN_ALL 用户 → 可管理 C, D 全部资产
 D 的 ADMIN_ALL 用户 → 可管理 D 全部资产（D 为 customer，无下级）
 ```
 
+### 场景示例
+
+#### 示例一：行政层级（国-省-市-县-乡-村）
+
+```mermaid
+graph TD
+    subgraph "账户树"
+        Root["国 (root)"]
+        Province["省 (reseller)"]
+        City["市 (reseller)"]
+        County["县 (reseller)"]
+        Town["乡 (reseller)"]
+        Village["村 (customer)"]
+    end
+
+    subgraph "国 账户下的用户"
+        GWY["国务院 ADMIN_ALL"]
+        CZB["财政部 ADMIN_Billing + read_SIM"]
+        GXB["工信部 ADMIN_SIM + ADMIN_eSIM"]
+    end
+
+    subgraph "县 账户下的用户"
+        XZF["县政府 ADMIN_ALL"]
+    end
+
+    subgraph "资产"
+        Ppl["人口/居民 (归属各级账户)"]
+    end
+
+    Root --> Province --> City --> County --> Town --> Village
+    Root --- GWY
+    Root --- CZB
+    Root --- GXB
+    County --- XZF
+    Village --- Ppl
+```
+
+| 角色 | 账户 | 权限 | 操作范围 |
+|------|------|------|----------|
+| 国务院 | 国 (root) | ADMIN_ALL | 全局所有资产和用户 |
+| 财政部 | 国 (root) | ADMIN_Billing + read_SIM | 全局账单管理和SIM只读 |
+| 工信部 | 国 (root) | ADMIN_SIM + ADMIN_eSIM | 全局SIM/eSIM管理 |
+| 省政府 | 省 (reseller) | ADMIN_ALL | 省→市→县→乡→村的全部资产 |
+| 县政府 | 县 (reseller) | ADMIN_ALL | 县→乡→村的全部资产 |
+
+**设计要点：**
+- "国"是唯一账户（root），不是登录实体
+- 国务院/财政部/工信部是"国"这个 root 账户下的三个不同用户，拥有不同权限
+- "人"是挂载在各级账户下的资产，县政府用户可对本县及下辖乡、村的"人"（资产）执行政策
+
+---
+
+#### 示例二：销售链路（捷德 → A → B → C → D）
+
+```mermaid
+graph TD
+    subgraph "账户树与用户"
+        J["捷德 (root)"]
+        A["A (reseller)"]
+        B["B (reseller)"]
+        C["C (reseller)"]
+        D["D (customer)"]
+
+        J_User["捷德管理员 ADMIN_ALL"]
+        A_User["A管理员 ADMIN_ALL"]
+        B_User["B管理员 ADMIN_ALL"]
+        C_User["C管理员 ADMIN_ALL"]
+        D_User["D管理员 ADMIN_ALL"]
+    end
+
+    J --> A --> B --> C --> D
+    J --- J_User
+    A --- A_User
+    B --- B_User
+    C --- C_User
+    D --- D_User
+```
+
+**账户开通流程：**
+1. 捷德（root）创建 A（reseller），并创建 A 的第一个 ADMIN_ALL 用户
+2. B 可以由 A 开通，也可以由捷德开通——但 `parent_account_id` 必须填 A
+3. C 可以由 B/A/捷德开通——`parent_account_id` 必须填 B
+4. D 可以由 C/B/A/捷德开通——`parent_account_id` 必须填 C
+5. 约束：开通操作的执行者必须是链路中 C 的上级账户中的用户，但 `parent_account_id` 指向真实直接上级
+
+| 操作者 | 操作的账户 | 创建谁 | parent_account_id |
+|--------|-----------|--------|-------------------|
+| 捷德管理员 | 捷德 (root) | A (reseller) | 捷德 (root) |
+| 捷德管理员 或 A管理员 | root 或 A | B (reseller) | A |
+| A管理员 或 B管理员 | A 或 B | C (reseller) | B |
+| C管理员 | C (reseller) | D (customer) | C |
+
+**权限递归示例：**
+| 用户 | 权限范围 |
+|------|----------|
+| A 的 ADMIN_ALL 用户 | A, B, C, D 的全部资产 |
+| B 的 ADMIN_ALL 用户 | B, C, D 的全部资产 |
+| C 的 ADMIN_ALL 用户 | C, D 的全部资产 |
+| D 的 ADMIN_ALL 用户 | D 的全部资产 |
+
 ---
 
 ## Components and Interfaces
@@ -1691,8 +1791,8 @@ delete 恢复  onstock            ✓          ✗        ✗         ✗       
 ### 权限校验约束
 
 1. **非特权用户**: 所有查询和操作范围限定于 `user.account_id`（及其下级账户，若为 reseller 且有 ADMIN_Account）。
-2. **reseller 数据范围**: 拥有 ADMIN_Account 权限的 reseller 可查看和操作名下所有下级账户（递归）的数据。
-3. **层级创建校验**: 创建下级账户时，校验 `parent.level + 1 < 4` 且 `parent.account_type = 'reseller'`。
+2. **reseller 数据范围**: 拥有管理权限（ADMIN_ALL 或特定 ADMIN_* 权限组）的 reseller 用户可查看和操作名下所有下级账户（递归）的对应资产和数据。
+3. **层级创建校验**: 创建下级账户时，校验 parent 的 `account_type` 为 reseller（或 root 创建一级）；customer 不可为任何账户的上级；除 root 外每个账户 `parent_account_id` 必填；上级账户的用户创建下级时，操作者须为链路中上级账户的用户，但 `parent_account_id` 指向新建账户的真实直接上级。
 4. **资源方操作校验**: 状态为停用或密码已过期时拒绝调用。
 5. **二次确认**: 资源方启停用、账户停用、资产删除、账单调整操作必须二次确认。
 
